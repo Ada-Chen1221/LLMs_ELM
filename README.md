@@ -44,6 +44,19 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+重要：不要盲目安装最新的 `torch` wheel。`torch` wheel 自带的 CUDA runtime 必须不高于当前 NVIDIA 驱动能支持的 CUDA 版本。比如你看到的日志里 `PyTorch version: 2.12.0+cu130` / `PyTorch CUDA build: 13.0`，但驱动只报告 `found version 12020`（约等于驱动支持 CUDA 12.2），因此 PyTorch 会判定 CUDA 不可用。当前 `requirements.txt` 默认固定到 `torch==2.5.1+cu121`，更适合这类 CUDA 12.2 驱动的 RTX 3090 服务器。
+
+如果你已经装到了不兼容的 `torch+cu130`，优先这样重装：
+
+```bash
+pip uninstall -y torch torchvision torchaudio
+pip install torch==2.5.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+python scripts/check_cuda.py
+```
+
+如果管理员能升级驱动，也可以保留新版 PyTorch，但需要把 NVIDIA 驱动升级到支持该 PyTorch CUDA build 的版本。CUDA 13.0 需要 580 系列或更新的 Linux 驱动；CUDA 12.2 驱动无法运行 `+cu130` 的 PyTorch。
+
 如果 `bitsandbytes` 与 CUDA/PyTorch 版本不匹配，请根据服务器 CUDA 版本重新安装兼容的 PyTorch 和 bitsandbytes。脚本不会写入 HuggingFace token；如需访问 gated/private 模型，请在服务器上用 `huggingface-cli login` 登录。
 
 ## 检查 CUDA
@@ -52,7 +65,7 @@ pip install -r requirements.txt
 python scripts/check_cuda.py
 ```
 
-该命令会输出 PyTorch 版本、CUDA 是否可用、可见 GPU 数量、GPU 名称与显存。脚本不会设置 `CUDA_VISIBLE_DEVICES`，请在命令前自行指定可见 GPU。
+该命令会输出 PyTorch 版本、PyTorch CUDA build、`nvidia-smi` 驱动版本、驱动支持的 CUDA Version、CUDA 是否可用、可见 GPU 数量、GPU 名称与显存。脚本不会设置 `CUDA_VISIBLE_DEVICES`，请在命令前自行指定可见 GPU。若 PyTorch CUDA build 高于驱动支持版本，脚本会给出重装 cu121 PyTorch 或升级驱动的提示。
 
 ## 单卡 Transformers 推理
 
@@ -224,7 +237,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/train_qlora.py \
 
 ## 常见问题
 
-- **CUDA 不可用**：运行 `python scripts/check_cuda.py`，确认 PyTorch CUDA build、驱动和 `CUDA_VISIBLE_DEVICES`。
+- **CUDA 不可用**：运行 `python scripts/check_cuda.py`，优先确认 PyTorch CUDA build 是否高于 `nvidia-smi` 显示的 CUDA Version。若出现 `torch+cu130` 但驱动只支持 CUDA 12.2，请重装 `torch==2.5.1+cu121` 或升级 NVIDIA 驱动。
 - **模型下载失败**：确认服务器网络、模型名、HuggingFace 登录状态和本地缓存权限。
 - **数据格式不合法**：确认 JSONL 每行都是 JSON object，且包含非空 `text` 或非空 `messages`。
 - **bitsandbytes 报错**：优先检查 CUDA 版 PyTorch、bitsandbytes 版本和 GPU 是否可见；QLoRA 通常需要 CUDA GPU。
