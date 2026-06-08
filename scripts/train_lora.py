@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from llm_lab.data import load_sft_jsonl  # noqa: E402
-from llm_lab.model_patch import apply_user_patch, preview_modules, print_trainable_parameters  # noqa: E402
 from llm_lab.model_utils import ensure_pad_token, maybe_enable_gradient_checkpointing, print_cuda_info  # noqa: E402
 from llm_lab.train_utils import (  # noqa: E402
     LoraCliConfig,
@@ -42,10 +41,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--gradient_checkpointing", action="store_true")
-    parser.add_argument("--preview_modules", action="store_true", help="Print named_modules() preview before training.")
-    parser.add_argument("--preview_modules_limit", type=int, default=120)
-    parser.add_argument("--patch_script", default=None, help="Path to python file with apply_patch(model)->model.")
-    parser.add_argument("--disable_lora", action="store_true", help="Do not inject LoRA; train only parameters marked requires_grad=True.")
     return parser.parse_args()
 
 
@@ -79,23 +74,16 @@ def main() -> None:
             f"Original error: {exc}"
         ) from exc
 
-    model = apply_user_patch(model, args.patch_script)
-    if args.preview_modules:
-        preview_modules(model, limit=args.preview_modules_limit)
     maybe_enable_gradient_checkpointing(model, args.gradient_checkpointing)
     train_dataset = load_sft_jsonl(args.train_file, tokenizer)
-    lora_config = None
-    if not args.disable_lora:
-        lora_config = build_lora_config(
-            LoraCliConfig(
-                r=args.lora_r,
-                alpha=args.lora_alpha,
-                dropout=args.lora_dropout,
-                target_modules=parse_target_modules(args.target_modules),
-            )
+    lora_config = build_lora_config(
+        LoraCliConfig(
+            r=args.lora_r,
+            alpha=args.lora_alpha,
+            dropout=args.lora_dropout,
+            target_modules=parse_target_modules(args.target_modules),
         )
-    else:
-        print("LoRA injection disabled. Training only parameters with requires_grad=True.")
+    )
     training_args = get_training_args(
         output_dir=args.output_dir,
         max_length=args.max_length,
@@ -107,7 +95,6 @@ def main() -> None:
         bf16=args.bf16,
     )
     trainer = build_sft_trainer(model, tokenizer, train_dataset, training_args, lora_config)
-    print_trainable_parameters(trainer.model)
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)

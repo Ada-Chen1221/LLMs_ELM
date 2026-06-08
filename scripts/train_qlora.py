@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from llm_lab.data import load_sft_jsonl  # noqa: E402
-from llm_lab.model_patch import apply_user_patch, preview_modules, print_trainable_parameters  # noqa: E402
 from llm_lab.model_utils import ensure_pad_token, maybe_enable_gradient_checkpointing, print_cuda_info  # noqa: E402
 from llm_lab.train_utils import (  # noqa: E402
     LoraCliConfig,
@@ -42,9 +41,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--gradient_checkpointing", action="store_true")
-    parser.add_argument("--preview_modules", action="store_true", help="Print named_modules() preview before training.")
-    parser.add_argument("--preview_modules_limit", type=int, default=120)
-    parser.add_argument("--patch_script", default=None, help="Path to python file with apply_patch(model)->model.")
     parser.add_argument("--bnb_4bit_quant_type", default="nf4", choices=["nf4", "fp4"])
     parser.add_argument("--bnb_4bit_use_double_quant", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bnb_4bit_compute_dtype", default="float16", choices=["float16", "bfloat16", "float32"])
@@ -101,9 +97,6 @@ def main() -> None:
         ) from exc
 
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
-    model = apply_user_patch(model, args.patch_script)
-    if args.preview_modules:
-        preview_modules(model, limit=args.preview_modules_limit)
     maybe_enable_gradient_checkpointing(model, args.gradient_checkpointing)
     train_dataset = load_sft_jsonl(args.train_file, tokenizer)
     lora_config = build_lora_config(
@@ -125,7 +118,6 @@ def main() -> None:
         bf16=args.bf16,
     )
     trainer = build_sft_trainer(model, tokenizer, train_dataset, training_args, lora_config)
-    print_trainable_parameters(trainer.model)
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)

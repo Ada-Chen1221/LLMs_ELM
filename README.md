@@ -23,10 +23,9 @@ scripts/
   download_model.py
   infer_transformers.py
   infer_lora.py
+  batch_infer_transformers.py
   batch_api_infer.py
   train_lora.py
-  example_model_patch.py
-  patch_resize_fc_example.py
   train_qlora.py
 src/llm_lab/
   __init__.py
@@ -122,7 +121,40 @@ CUDA_VISIBLE_DEVICES=0 python scripts/infer_transformers.py \
 
 
 
-## 调用已部署模型并批量处理 prompt
+## 调用下载好的本地模型批量处理 prompt
+
+当前默认推荐：**直接加载你已经下载好的模型目录**，例如 `models/Qwen3-4B-Instruct-2507`，然后从 JSONL 文件批量读取 prompt，生成结果并保存到新的 JSONL 文件。
+
+输入文件每行一个 JSON object，支持两种格式：
+
+```json
+{"id": "p1", "prompt": "请用一句话解释什么是大语言模型。"}
+{"id": "p2", "messages": [{"role": "user", "content": "LoRA 适合什么场景？"}]}
+```
+
+仓库提供了示例输入 `data/prompts.jsonl`。用你现在下载好的 `models/Qwen3-4B-Instruct-2507` 可以这样跑：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_transformers.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --input_file data/prompts.jsonl \
+  --output_file outputs/qwen3_4b_batch_outputs.jsonl \
+  --batch_size 4 \
+  --max_new_tokens 512 \
+  --overwrite
+```
+
+输出也是 JSONL，每行包含 `index`、`response`，并会保留输入中的 `id` 和 `prompt` 字段，方便后处理。
+
+常用参数：
+
+- `--prompt_field prompt`：指定从 JSON 哪个字段读取普通 prompt。
+- `--messages_field messages`：如果每行已经是 chat messages，用这个字段。
+- `--batch_size 4`：单次送入模型的样本数；显存不够就调小到 1 或 2。
+- `--dtype auto|float16|bfloat16|float32`：RTX 3090 通常用 `auto` 或 `float16`。
+- `--device_map auto`：默认自动放到可见 GPU。
+
+## 可选：调用已部署模型并批量处理 prompt
 
 如果模型已经通过 vLLM、TGI 或其他服务部署成 OpenAI-compatible API，可以用 `scripts/batch_api_infer.py` 批量请求 `/v1/chat/completions`。输入文件是 JSONL，每行一个样本，支持两种格式：
 
@@ -179,65 +211,6 @@ CUDA_VISIBLE_DEVICES=0 python scripts/infer_lora.py \
 
 同样适用于 QLoRA 训练出来的 adapter（前提是 adapter 与 base model 对应）。
 
-
-## 我想改模型内部结构，不想只做黑盒 SFT
-
-你这个反馈是对的。默认 LoRA/QLoRA 脚本是“先加载基座模型，再注入 LoRA adapter”的标准流程。为了支持你改内部模块，现在训练脚本增加了两个能力：
-
-1. `--preview_modules`：训练前打印 `named_modules()` 预览，方便你定位要改的层名。
-2. `--patch_script path/to/your_patch.py`：在注入 LoRA 前执行你自己的 `apply_patch(model)`，可以替换/包装任意子模块。
-
-示例：
-
-```bash
-CUDA_VISIBLE_DEVICES=0 python scripts/train_lora.py \
-  --model_name_or_path Qwen/Qwen3-1.7B \
-  --train_file data/toy_sft.jsonl \
-  --output_dir outputs/qwen3_1p7b_lora_patch_test \
-  --preview_modules \
-  --patch_script scripts/example_model_patch.py \
-  --num_train_epochs 1 \
-  --max_length 512 \
-  --per_device_train_batch_size 1 \
-  --gradient_accumulation_steps 4
-```
-
-`patch_script` 文件需要提供：
-
-```python
-def apply_patch(model):
-    # 在这里做模块替换/结构修改
-    return model
-```
-
-仓库里提供了最小示例：`scripts/example_model_patch.py`。
-
-
-### 具体示例：改一个全连接层维度，并只训练改动部分
-
-仓库里新增了 `scripts/patch_resize_fc_example.py`，它会：
-
-1. 把 `model.layers.0.mlp.down_proj` 从单层 `nn.Linear` 替换为 `BottleneckFC`（内部隐藏维度改成 1024）；
-2. 冻结模型全部参数；
-3. 仅放开这个新模块的参数训练。
-
-运行命令（关键是 `--patch_script` + `--disable_lora`）：
-
-```bash
-CUDA_VISIBLE_DEVICES=0 python scripts/train_lora.py \
-  --model_name_or_path Qwen/Qwen3-1.7B \
-  --train_file data/toy_sft.jsonl \
-  --output_dir outputs/qwen3_1p7b_custom_fc_only \
-  --patch_script scripts/patch_resize_fc_example.py \
-  --disable_lora \
-  --preview_modules \
-  --num_train_epochs 1 \
-  --max_length 512 \
-  --per_device_train_batch_size 1 \
-  --gradient_accumulation_steps 4
-```
-
-如果你想“改模块 + 同时加 LoRA”，去掉 `--disable_lora` 即可。
 
 ## 单卡 LoRA 训练
 
