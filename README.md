@@ -17,11 +17,13 @@ configs/
   train_qlora_qwen3_1p7b.yaml
 data/
   toy_sft.jsonl
+  prompts.jsonl
 scripts/
   check_cuda.py
   download_model.py
   infer_transformers.py
   infer_lora.py
+  batch_api_infer.py
   train_lora.py
   example_model_patch.py
   patch_resize_fc_example.py
@@ -118,6 +120,45 @@ CUDA_VISIBLE_DEVICES=0 python scripts/infer_transformers.py \
 
 在国内网络环境中，也可以在运行前设置可用的 HuggingFace 镜像端点，例如 `export HF_ENDPOINT=https://hf-mirror.com`，或让服务器管理员配置代理/缓存。建议先执行 `python scripts/download_model.py ...` 确认下载进度，下载完成后再运行推理/训练脚本。
 
+
+
+## 调用已部署模型并批量处理 prompt
+
+如果模型已经通过 vLLM、TGI 或其他服务部署成 OpenAI-compatible API，可以用 `scripts/batch_api_infer.py` 批量请求 `/v1/chat/completions`。输入文件是 JSONL，每行一个样本，支持两种格式：
+
+```json
+{"id": "p1", "prompt": "请用一句话解释什么是大语言模型。"}
+{"id": "p2", "messages": [{"role": "user", "content": "LoRA 适合什么场景？"}]}
+```
+
+仓库提供了示例输入 `data/prompts.jsonl`。假设你的服务地址是 `http://127.0.0.1:8000/v1`，模型名是部署时暴露的名字，可以这样批量跑：
+
+```bash
+python scripts/batch_api_infer.py \
+  --base_url http://127.0.0.1:8000/v1 \
+  --model Qwen3-1.7B \
+  --input_file data/prompts.jsonl \
+  --output_file outputs/batch_api_results.jsonl \
+  --concurrency 4 \
+  --max_tokens 512 \
+  --overwrite
+```
+
+输出也是 JSONL，每行包含 `ok`、`response`、`latency_sec`、原始 `raw_response` 或错误信息。若你的服务需要鉴权，可以设置：
+
+```bash
+export OPENAI_API_KEY=你的服务token
+```
+
+如果是本地 vLLM，一般服务端类似：
+
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model models/Qwen3-1.7B \
+  --served-model-name Qwen3-1.7B \
+  --host 0.0.0.0 \
+  --port 8000
+```
 
 ## LoRA/QLoRA 训练后如何推理
 
