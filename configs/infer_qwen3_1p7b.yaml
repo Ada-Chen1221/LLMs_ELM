@@ -1,0 +1,7 @@
+model_name_or_path: Qwen/Qwen3-1.7B
+prompt: 请用一句话解释什么是大语言模型。
+max_new_tokens: 128
+temperature: 0.7
+top_p: 0.9
+dtype: auto
+device_map: auto

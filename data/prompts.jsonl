@@ -1,0 +1,3 @@
+{"id":"p1","prompt":"请用一句话解释什么是大语言模型。"}
+{"id":"p2","prompt":"给出三个提升实验复现性的建议。"}
+{"id":"p3","messages":[{"role":"system","content":"你是一个简洁的科研助手。"},{"role":"user","content":"LoRA 微调适合什么场景？"}]}
