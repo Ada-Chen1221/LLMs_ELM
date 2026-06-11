@@ -2,3 +2,7 @@ __pycache__/
 *.py[cod]
 outputs/
 .cache/
+
+# Local model checkpoints
+model/
+models/

@@ -18,7 +18,7 @@ DEFAULT_SYSTEM_PROMPT = "You are Qwen, created by Alibaba Cloud. You are a helpf
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run native Transformers text generation.")
-    parser.add_argument("--model_name_or_path", default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--model_name_or_path", default="model/Qwen3-1.7B")
     parser.add_argument("--prompt", default="请用一句话解释什么是大语言模型。")
     parser.add_argument("--system_prompt", default=DEFAULT_SYSTEM_PROMPT)
     parser.add_argument("--max_new_tokens", type=int, default=128)

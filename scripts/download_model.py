@@ -10,7 +10,7 @@ from pathlib import Path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pre-download a HuggingFace model for offline/local inference and training.")
     parser.add_argument("--repo_id", default="Qwen/Qwen3-1.7B", help="HuggingFace repo id, e.g. Qwen/Qwen3-1.7B.")
-    parser.add_argument("--local_dir", default="models/Qwen3-1.7B", help="Directory where files will be written visibly.")
+    parser.add_argument("--local_dir", default="model/Qwen3-1.7B", help="Directory where files will be written visibly.")
     parser.add_argument("--revision", default=None, help="Optional branch/tag/commit.")
     parser.add_argument("--cache_dir", default=None, help="Optional HuggingFace cache directory.")
     parser.add_argument(

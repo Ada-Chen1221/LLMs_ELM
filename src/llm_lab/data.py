@@ -206,3 +206,62 @@ def load_sft_dataset(
 def load_sft_jsonl(path: str | Path, tokenizer: Any):
     """Backward-compatible wrapper for older scripts."""
     return load_sft_dataset(path, tokenizer)
+
+
+def _prompt_to_grpo_prompt(example: dict[str, Any], prompt_field: str = "prompt") -> str | list[dict[str, str]]:
+    """Extract a TRL GRPO prompt from supported JSON rows."""
+    messages = example.get("messages")
+    if isinstance(messages, list) and messages:
+        if messages[-1].get("role") == "assistant":
+            messages = messages[:-1]
+        return messages
+
+    prompt = example.get(prompt_field)
+    if isinstance(prompt, str) and prompt.strip():
+        return prompt
+
+    text = example.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
+
+    raise ValueError(f"Expected a non-empty '{prompt_field}', 'messages', or 'text' prompt.")
+
+
+def load_grpo_dataset(
+    path: str | Path,
+    prompt_field: str = "prompt",
+    answer_field: str = "groundtruth",
+    split_field: str | None = None,
+    split: str | None = None,
+):
+    """Load JSON/JSONL data for GRPO-style RL.
+
+    The returned Dataset has a ``prompt`` column for TRL's ``GRPOTrainer`` and an
+    ``answer`` column that can be consumed by reward functions.
+    """
+    from datasets import Dataset
+
+    raw_rows = _read_json_or_jsonl(path)
+    if split_field and split is not None:
+        raw_rows = [row for row in raw_rows if row.get(split_field) == split]
+        if not raw_rows:
+            raise ValueError(f"No examples found with {split_field}={split!r} in {path}")
+
+    rows: list[dict[str, Any]] = []
+    for idx, obj in enumerate(raw_rows):
+        try:
+            prompt = _prompt_to_grpo_prompt(obj, prompt_field=prompt_field)
+            answer = obj.get(answer_field)
+            if answer is None:
+                messages = obj.get("messages")
+                if isinstance(messages, list) and messages and messages[-1].get("role") == "assistant":
+                    answer = messages[-1].get("content")
+            if not isinstance(answer, str) or not answer.strip():
+                raise ValueError(f"Expected a non-empty '{answer_field}' answer or final assistant message.")
+            rows.append({"prompt": prompt, "answer": answer})
+        except ValueError as exc:
+            raise ValueError(f"Invalid GRPO example at index {idx} of {path}: {exc}") from exc
+
+    if not rows:
+        raise ValueError(f"No RL training examples found in {path}")
+    return Dataset.from_list(rows)
