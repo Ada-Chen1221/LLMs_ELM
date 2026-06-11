@@ -17,7 +17,9 @@ configs/
   train_qlora_qwen3_1p7b.yaml
 data/
   toy_sft.jsonl
+  sft_prompt_groundtruth.json
   prompts.jsonl
+  prompts.json
 scripts/
   check_cuda.py
   download_model.py
@@ -123,34 +125,97 @@ CUDA_VISIBLE_DEVICES=0 python scripts/infer_transformers.py \
 
 ## 调用下载好的本地模型批量处理 prompt
 
-当前默认推荐：**直接加载你已经下载好的模型目录**，例如 `models/Qwen3-4B-Instruct-2507`，然后从 JSONL 文件批量读取 prompt，生成结果并保存到新的 JSONL 文件。
+当前默认推荐：**直接加载你已经下载好的模型目录**，例如 `models/Qwen3-4B-Instruct-2507`，然后从 `.json` 或 `.jsonl` 文件批量读取 `prompt`，生成结果并保存到新的文件。
 
-输入文件每行一个 JSON object，支持两种格式：
+你的数据是一个 JSON array，每个元素里都有 `prompt` 字段，这种格式已支持：
 
 ```json
-{"id": "p1", "prompt": "请用一句话解释什么是大语言模型。"}
-{"id": "p2", "messages": [{"role": "user", "content": "LoRA 适合什么场景？"}]}
+[
+  {
+    "prompt_id": "claim001_highInv_highExpert_StrongArg",
+    "claim_id": 1,
+    "prompt": "You are a cinema customer ... Do not include any explanation."
+  },
+  {
+    "prompt_id": "claim001_highInv_highExpert_WeakArg",
+    "claim_id": 1,
+    "prompt": "You are a cinema customer ... Do not include any explanation."
+  }
+]
 ```
 
-仓库提供了示例输入 `data/prompts.jsonl`。用你现在下载好的 `models/Qwen3-4B-Instruct-2507` 可以这样跑：
+仓库提供了同格式示例输入 `data/prompts.json`。用你现在下载好的 `models/Qwen3-4B-Instruct-2507` 可以这样跑：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_transformers.py \
   --model_name_or_path models/Qwen3-4B-Instruct-2507 \
-  --input_file data/prompts.jsonl \
-  --output_file outputs/qwen3_4b_batch_outputs.jsonl \
+  --input_file data/prompts.json \
+  --output_file outputs/qwen3_4b_batch_outputs.json \
   --batch_size 4 \
-  --max_new_tokens 512 \
+  --max_new_tokens 64 \
+  --output_field output \
   --overwrite
 ```
 
-输出也是 JSONL，每行包含 `index`、`response`，并会保留输入中的 `id` 和 `prompt` 字段，方便后处理。
+输出默认会保持 JSON array 格式，并在每个原始对象上新增一个 `output` 字段保存模型输出。例如：
+
+```json
+[
+  {
+    "prompt_id": "claim001_highInv_highExpert_StrongArg",
+    "claim_id": 1,
+    "prompt": "...",
+    "output": "My attitude score toward this proposal is: 9"
+  }
+]
+```
+
+如果每条数据需要重复生成多次，可以加 `--num_repeats`。此时 `output` 字段会变成一个 list，按生成顺序保存多次输出：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_transformers.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --input_file data/prompts.json \
+  --output_file outputs/qwen3_4b_batch_outputs_repeat5.json \
+  --batch_size 4 \
+  --max_new_tokens 64 \
+  --num_repeats 5 \
+  --output_field output \
+  --overwrite
+```
+
+重复 5 次后的输出示例：
+
+```json
+[
+  {
+    "prompt_id": "claim001_highInv_highExpert_StrongArg",
+    "prompt": "...",
+    "output": [
+      "My attitude score toward this proposal is: 9",
+      "My attitude score toward this proposal is: 8",
+      "My attitude score toward this proposal is: 9",
+      "My attitude score toward this proposal is: 10",
+      "My attitude score toward this proposal is: 8"
+    ]
+  }
+]
+```
+
+仍然兼容 JSONL：如果输入或输出想用 `.jsonl`，把 `--input_file` / `--output_file` 改成 `.jsonl` 即可；输出格式也可以用 `--output_format json|jsonl` 强制指定。
 
 常用参数：
 
 - `--prompt_field prompt`：指定从 JSON 哪个字段读取普通 prompt。
-- `--messages_field messages`：如果每行已经是 chat messages，用这个字段。
-- `--batch_size 4`：单次送入模型的样本数；显存不够就调小到 1 或 2。
+- `--messages_field messages`：如果每条数据已经是 chat messages，用这个字段。
+- `--output_field output`：指定模型输出写回到哪个字段；默认就是 `output`。
+- `--adapter_path outputs/...`：可选；加载训练好的 LoRA/QLoRA adapter 做批量推理。
+- `--merge_and_unload`：可选；配合 `--adapter_path`，在内存中先合并 adapter 再生成。
+- `--num_repeats 5`：每条 prompt 重复生成 5 次；当大于 1 时，`output` 字段保存为 list。
+- `--always_list_output`：即使 `--num_repeats 1`，也把 `output` 保存为 list。
+- `--seed 42`：可选随机种子，方便复现实验。
+- `--batch_size 4`：单次送入模型的生成样本数；如果 `num_repeats` 很大，显存不够就调小到 1 或 2。
+- `--max_new_tokens 64`：你的 Likert 任务只需要很短输出，建议先用 32 或 64。
 - `--dtype auto|float16|bfloat16|float32`：RTX 3090 通常用 `auto` 或 `float16`。
 - `--device_map auto`：默认自动放到可见 GPU。
 
@@ -211,6 +276,185 @@ CUDA_VISIBLE_DEVICES=0 python scripts/infer_lora.py \
 
 同样适用于 QLoRA 训练出来的 adapter（前提是 adapter 与 base model 对应）。
 
+如果训练完 LoRA/QLoRA 后要继续做 JSON 批量推理，直接用同一个批量脚本并加上 `--adapter_path`。这里的 `--model_name_or_path` 是**原始基座模型目录**，`--adapter_path` 是训练输出目录：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_transformers.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --adapter_path outputs/qwen3_4b_qlora_sft_maskedlowinv \
+  --input_file data/prompts.json \
+  --output_file outputs/qwen3_4b_qlora_batch_outputs.json \
+  --prompt_field prompt \
+  --output_field output \
+  --batch_size 4 \
+  --max_new_tokens 64 \
+  --overwrite
+```
+
+如果想在内存中先把 adapter 合并到 base model 再生成，可以加 `--merge_and_unload`：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_transformers.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --adapter_path outputs/qwen3_4b_qlora_sft_maskedlowinv \
+  --merge_and_unload \
+  --input_file data/prompts.json \
+  --output_file outputs/qwen3_4b_qlora_merged_batch_outputs.json \
+  --prompt_field prompt \
+  --output_field output \
+  --batch_size 4 \
+  --max_new_tokens 64 \
+  --overwrite
+```
+
+`--merge_and_unload` 只是当前进程内合并，方便得到普通 Transformers 模型对象做推理；不会覆盖你的原始模型目录或 adapter 目录。
+
+
+## 使用 prompt / groundtruth JSON 文件做 SFT
+
+你的 SFT 数据可以是一个 `.json` 文件，顶层是 list，每条样本包含 `prompt` 和 `groundtruth` 字段，例如：
+
+```json
+[
+  {
+    "prompt_id": "claim001_lowInv_highExpert_StrongArg",
+    "prompt": "You are a cinema customer ... Do not include any explanation.",
+    "split": "train",
+    "groundtruth": "My attitude score toward this proposal is: 6"
+  }
+]
+```
+
+训练脚本会把它转换成 chat SFT 文本：`user=prompt`，`assistant=groundtruth`。如果 tokenizer 支持 chat template，会自动使用 `apply_chat_template`。仓库提供了同格式示例 `data/sft_prompt_groundtruth.json`。
+
+默认训练现在使用 **response-only loss**：模型输入仍然包含完整 prompt + groundtruth，但 labels 会把 prompt 部分全部置为 `-100`，因此 loss 只在 assistant response / `groundtruth` token 上计算。这样可以避免模型主要学会复读长 prompt，而没有真正优化目标答案。如果你确实想回到旧的“prompt + response 全部算 loss”行为，可以显式加 `--loss_on_prompt`。
+
+如果你之前已经用旧脚本训练过一批 adapter，建议先用新逻辑从 base model 重新训练一版做对比；旧 adapter 的 loss 优化目标已经不一致，继续训练也可以，但通常不如直接按 response-only loss 重训干净。
+
+LoRA 训练示例：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/train_lora.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --train_file data/sft_prompt_groundtruth.json \
+  --prompt_field prompt \
+  --response_field groundtruth \
+  --split_field split \
+  --split train \
+  --output_dir outputs/qwen3_4b_lora_sft_prompt_groundtruth \
+  --num_train_epochs 1 \
+  --max_length 2048 \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 4 \
+  --gradient_checkpointing
+```
+
+QLoRA 训练示例（显存更省，RTX 3090 上建议优先试这个）：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/train_qlora.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --train_file data/sft_prompt_groundtruth.json \
+  --prompt_field prompt \
+  --response_field groundtruth \
+  --split_field split \
+  --split train \
+  --output_dir outputs/qwen3_4b_qlora_sft_prompt_groundtruth \
+  --num_train_epochs 1 \
+  --max_length 2048 \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 4 \
+  --gradient_checkpointing
+```
+
+相关参数：
+
+- `--prompt_field prompt`：输入 prompt 字段名。
+- `--response_field groundtruth`：监督目标字段名。
+- `--split_field split --split train`：可选，只训练 `split == "train"` 的样本。
+- 默认只对 response / `groundtruth` 计算 loss；prompt token 会被 mask 成 `-100`。
+- `--loss_on_prompt`：可选，恢复旧行为，让 prompt 和 response 都参与 loss。一般不建议在你的 Likert / groundtruth 监督任务里使用。
+- 如果你的字段名不同，只需要改这几个参数，不需要改代码。
+
+## 从 checkpoint 或已有 adapter 继续训练
+
+如果测试结果还不理想，可以继续训练。这里有两种常见情况：
+
+### 方式 A：从 `checkpoint-*` 精确恢复训练状态（推荐）
+
+如果 `output_dir` 里有 Trainer 自动保存的 checkpoint，例如：
+
+```text
+outputs/qwen3_4b_qlora_sft_maskedlowinv/checkpoint-435
+```
+
+优先用 `--resume_from_checkpoint`。这种方式会恢复 adapter 权重、optimizer、scheduler、global step 等训练状态。注意 `--num_train_epochs` 要设置成**总 epoch 数**，不是“再训练几个 epoch”。例如之前已经训练 1 个 epoch，现在想继续到 3 个 epoch，就设置 `--num_train_epochs 3`。
+
+精确恢复 Trainer checkpoint 时，建议保持 batch size、gradient accumulation 等训练参数与原 run 一致。另外，较新的 Transformers 会因为 CVE-2025-32434 要求 `torch>=2.6` 才能加载 `optimizer.pt` / `scheduler.pt` 这类 Trainer 状态文件；如果你的环境还是 `torch 2.5.x`，请看下面“方式 B”。
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/train_qlora.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --train_file data/split_data/train_lowinv_sft.json \
+  --prompt_field prompt \
+  --response_field groundtruth \
+  --output_dir outputs/qwen3_4b_qlora_sft_maskedlowinv \
+  --resume_from_checkpoint outputs/qwen3_4b_qlora_sft_maskedlowinv/checkpoint-435 \
+  --num_train_epochs 3 \
+  --max_length 256 \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 4 \
+  --gradient_checkpointing
+```
+
+LoRA 脚本同理，把 `scripts/train_qlora.py` 换成 `scripts/train_lora.py` 即可。
+
+### 方式 B：从 checkpoint 只加载 adapter 权重继续训（适合 torch<2.6 或想改 batch size）
+
+如果遇到 `torch.load` / CVE-2025-32434 报错，或者你想像下面这样把 batch size 从 1 改成 10，不要精确恢复 optimizer/scheduler。可以加 `--resume_checkpoint_as_adapter`：脚本会把 `--resume_from_checkpoint` 指向的 checkpoint 当作 adapter 权重加载，然后重新初始化 optimizer/scheduler。
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/train_qlora.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --train_file data/split_data/train_lowinv_sft.json \
+  --prompt_field prompt \
+  --response_field groundtruth \
+  --output_dir outputs/qwen3_4b_qlora_sft_maskedlowinv_continue \
+  --resume_from_checkpoint outputs/qwen3_4b_qlora_sft_maskedlowinv/checkpoint-435 \
+  --resume_checkpoint_as_adapter \
+  --num_train_epochs 1 \
+  --learning_rate 5e-5 \
+  --max_length 256 \
+  --per_device_train_batch_size 10 \
+  --gradient_accumulation_steps 10 \
+  --gradient_checkpointing
+```
+
+这种方式不是“精确恢复 step”，所以 `--num_train_epochs 1` 表示从当前 adapter 权重开始重新跑 1 个 epoch。继续训练时建议把学习率调小一些，例如 `5e-5` 或 `1e-5`。
+
+### 方式 C：从最终 adapter 继续微调（不恢复 optimizer）
+
+如果你只有最终保存的 adapter 目录，或者想换一个新的 `output_dir` 继续训，可以用 `--adapter_path`。这种方式会加载已有 adapter 权重并继续更新它，但 optimizer/scheduler 会重新开始：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/train_qlora.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --adapter_path outputs/qwen3_4b_qlora_sft_maskedlowinv \
+  --train_file data/split_data/train_lowinv_sft.json \
+  --prompt_field prompt \
+  --response_field groundtruth \
+  --output_dir outputs/qwen3_4b_qlora_sft_maskedlowinv_continue \
+  --num_train_epochs 1 \
+  --learning_rate 5e-5 \
+  --max_length 256 \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 4 \
+  --gradient_checkpointing
+```
+
+建议继续训练时把学习率调小一些，例如从 `2e-4` 降到 `5e-5` 或 `1e-5`，避免把已经学到的 adapter 权重冲坏。
+
+如果你仍然想使用 `--resume_from_checkpoint` 精确恢复，请升级到与服务器 NVIDIA driver 兼容的 `torch>=2.6`，并尽量不要改变原 checkpoint 的 batch size / accumulation 等关键训练参数。
 
 ## 单卡 LoRA 训练
 
@@ -257,6 +501,8 @@ QLoRA 默认使用：
 
 RTX 3090 上默认使用 fp16 更稳；如确有需要可增加 `--bf16`，脚本会关闭 fp16。
 
+> 说明：部分 Qwen 本地 checkpoint 的 config 里可能带有 `bfloat16` dtype，PEFT/TRL 注入 LoRA adapter 后可能让可训练 adapter 参数或梯度变成 bf16。脚本在 fp16 训练模式下会自动把可训练参数转成 fp32，避免 PyTorch GradScaler 报 `_amp_foreach_non_finite_check_and_unscale_cuda not implemented for 'BFloat16'`。这不会把 4-bit base model 反量化，只影响很小的可训练 adapter 权重。
+
 ## 双卡训练示例
 
 LoRA 双卡：
@@ -286,6 +532,41 @@ CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes=2 scripts/train_qlora
   --gradient_accumulation_steps 4 \
   --gradient_checkpointing
 ```
+
+### 你的全量数据 40 epoch 双卡 QLoRA 示例
+
+如果你要用 `models/Qwen3-4B-Instruct-2507` 在全量训练集上跑 40 epoch，建议先用比较保守、可复现的双卡设置：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes=2 scripts/train_qlora.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --train_file data/split_data/train_lowinv_sft.json \
+  --prompt_field prompt \
+  --response_field groundtruth \
+  --output_dir outputs/qwen3_4b_qlora_sft_maskedlowinv_40ep_2gpu_response_only \
+  --num_train_epochs 40 \
+  --learning_rate 2e-4 \
+  --max_length 256 \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 2 \
+  --gradient_checkpointing
+```
+
+双卡时有效 batch size 的计算方式是：
+
+```text
+effective_batch_size = per_device_train_batch_size * gradient_accumulation_steps * GPU数量
+```
+
+例如：
+
+- 单卡 `per_device_train_batch_size=1`、`gradient_accumulation_steps=4`：有效 batch size = `1 * 4 * 1 = 4`。
+- 双卡若想保持同样有效 batch size，用 `per_device_train_batch_size=1`、`gradient_accumulation_steps=2`：有效 batch size = `1 * 2 * 2 = 4`。
+- 双卡若用 `per_device_train_batch_size=1`、`gradient_accumulation_steps=4`：有效 batch size = `1 * 4 * 2 = 8`，速度可能更快，但优化动态会变，和单卡设置不完全可比。
+
+如果显存还有余量，可以再尝试把 `--per_device_train_batch_size` 从 `1` 提到 `2` 或 `4`；如果 OOM，就先保持 `1`。不建议一开始直接设到 `10`，除非已经确认每张 3090 都能稳定容纳该 micro batch。
+
+训练启动时应看到两份进程日志，并且每个进程绑定一张可见 GPU。当前训练默认是 response-only loss；不要加 `--loss_on_prompt`，除非你明确想回到旧的全序列 loss。
 
 如果只想让脚本看到第 2、3 张物理卡，可以使用：
 
