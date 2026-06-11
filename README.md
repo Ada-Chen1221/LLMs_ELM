@@ -48,21 +48,28 @@ README.md
 
 > `scripts/train_lora.py` 是主 SFT 入口；`scripts/train_qlora.py` 作为兼容入口，默认打开 `--load_in_4bit` 并调用同一套 Unsloth SFT 逻辑。
 
-如果你想像官方 Colab 参考代码那样在 notebook 里逐 cell 跑，Notebook 默认会从 `model/Qwen3-1.7B` 读取本地模型。先确认当前环境有 notebook 入口：
+如果你想像官方 Colab 参考代码那样在 notebook 里逐 cell 跑，Notebook 默认会从 `model/Qwen3-1.7B` 读取本地模型。**不要重新创建环境**；把你已经装好依赖的当前 conda 环境注册成 Jupyter kernel 即可：
 
 ```bash
-# requirements.txt 已包含 notebook/ipykernel；如果你还没重装依赖，先执行：
-pip install notebook ipykernel
+conda activate llm-lab   # 换成你现在已经装好依赖的环境名
+python scripts/register_jupyter_kernel.py --name llm-lab --display-name "Python (llm-lab)"
 ```
 
-然后推荐用 `python -m notebook` 启动（比直接调用 `jupyter` 命令更不依赖 PATH）：
+如果提示 `No module named ipykernel`，只需要在这个已装好的环境里补一个很小的 kernel 包，不需要重装 Unsloth/Torch：
+
+```bash
+python -m pip install ipykernel
+python scripts/register_jupyter_kernel.py --name llm-lab --display-name "Python (llm-lab)"
+```
+
+然后用任意已有 Jupyter 服务打开 notebook，并在页面菜单里选择：`Kernel -> Change Kernel -> Python (llm-lab)`。如果当前环境本身也装了 notebook，可以这样启动；若没有 `jupyter` 命令，优先用 `python -m notebook`：
 
 ```bash
 # 推荐：启动 notebook 前指定物理 GPU，例如使用 1 号卡
 CUDA_VISIBLE_DEVICES=1 python -m notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
 ```
 
-如果你更习惯 `jupyter notebook ...`，也可以在安装 `notebook` 后使用；若出现 `bash: jupyter: command not found`，就用上面的 `python -m notebook ...`。
+如果服务器已经有公共 Jupyter/JupyterLab，也可以不用在 `llm-lab` 里安装 notebook；只要上面注册了 kernel，打开页面后切到 `Python (llm-lab)` 即可。
 
 也可以在 notebook 第 0 个代码 cell 里设置 `SELECTED_GPU = "1"`；注意必须在 import `torch` / `unsloth` 之前设置，若已经运行过后面的 cell，请先 Restart Kernel。
 
