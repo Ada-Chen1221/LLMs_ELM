@@ -28,6 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_file", default="outputs/batch_unsloth_outputs.json")
     parser.add_argument("--prompt_field", default="prompt")
     parser.add_argument("--messages_field", default="messages")
+    parser.add_argument("--split_field", default=None, help="Optional field used to filter rows, e.g. split.")
+    parser.add_argument("--split", default=None, help="Optional split value to keep, e.g. test.")
     parser.add_argument("--output_field", default="output", help="Field added to each original row with model output.")
     parser.add_argument("--output_format", choices=["auto", "json", "jsonl"], default="auto")
     parser.add_argument("--system_prompt", default=None)
@@ -147,6 +149,12 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     rows = read_records(args.input_file)
+    if args.split_field and args.split is not None:
+        before = len(rows)
+        rows = [row for row in rows if row.get(args.split_field) == args.split]
+        if not rows:
+            raise SystemExit(f"No rows found with {args.split_field}={args.split!r} in {args.input_file}.")
+        print(f"Filtered {before} rows to {len(rows)} rows with {args.split_field}={args.split!r}")
     print(f"Loaded {len(rows)} prompts from {args.input_file}")
     print(f"Model or adapter: {args.model_name_or_path}")
     print_cuda_info()
