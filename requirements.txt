@@ -9,6 +9,7 @@ accelerate
 datasets
 peft
 trl
+unsloth
 bitsandbytes
 sentencepiece
 protobuf
