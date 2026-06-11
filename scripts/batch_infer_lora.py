@@ -103,7 +103,10 @@ def row_to_messages(row: dict[str, Any], prompt_field: str, messages_field: str,
         messages = row[messages_field]
         if not isinstance(messages, list):
             raise ValueError(f"'{messages_field}' must be a list of chat messages.")
-        return messages
+        prompt_messages = [dict(message) for message in messages]
+        if prompt_messages and str(prompt_messages[-1].get("role", "")).strip().lower() in {"assistant", "respondent"}:
+            prompt_messages = prompt_messages[:-1]
+        return prompt_messages
 
     prompt = row.get(prompt_field)
     if not isinstance(prompt, str) or not prompt.strip():

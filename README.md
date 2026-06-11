@@ -74,7 +74,7 @@ CUDA_VISIBLE_DEVICES=1 python -m notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
 
 这个 notebook 里保留了 Unsloth 原生写法：`FastLanguageModel.from_pretrained(...)`、`FastLanguageModel.get_peft_model(...)`、TRL `SFTTrainer/GRPOTrainer`、response-only 与 full-loss SFT、保存/合并 adapter、单条推理、批量推理、JSON/JSONL 读写与 GRPO reward 示例。
 
-> 你的实验数据如果已经拆成 `train.json` / `test.json` 两个 JSON array，并且每条包含 `prompt`、`groundtruth`、`prompt_id`、`condition` 等字段，推荐先用 notebook：它会用 `TRAIN_FILE` 做 SFT，用 `TEST_FILE` 做批量推理，输出时保留所有原始元数据并新增 `model_output` / `parsed_score`。
+> 你的实验数据如果已经拆成 `train.json` / `test.json` 两个 JSON array，推荐先用 notebook：它会先把原始 `prompt` + 答案字段（默认候选：`groundtruth` / `response` / `answer` / `label` / `output` / `completion`）转换成标准 `messages` SFT 数据，再用 `TRAIN_FILE` 做 SFT、用 `TEST_FILE` 做批量推理，输出时保留原始元数据并新增 `model_output` / `parsed_score`。
 
 ## 创建环境与安装依赖
 
@@ -195,12 +195,12 @@ CUDA_VISIBLE_DEVICES=0 python scripts/infer_lora.py \
 
 ### Unsloth 批量推理
 
-batch infer 没有删：原来的 `scripts/batch_infer_transformers.py` 还在；这次另外补了 Unsloth/LoRA adapter 版本 `scripts/batch_infer_lora.py`，用于直接加载 Unsloth 训练保存的 adapter 目录。输入支持 JSON array 和 JSONL，字段可以是 `prompt` 或 `messages`。
+batch infer 没有删：原来的 `scripts/batch_infer_transformers.py` 还在；这次另外补了 Unsloth/LoRA adapter 版本 `scripts/batch_infer_lora.py`，用于直接加载 Unsloth 训练保存的 adapter 目录。输入支持 JSON array 和 JSONL，字段可以是 `prompt` 或标准 `messages`；如果 `messages` 里最后一条是 assistant/respondent 答案，推理时会自动去掉，只把 system/user 作为 prompt。
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
   --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
-  --input_file data/test.json \
+  --input_file outputs/processed_test_messages.json \
   --output_file outputs/qwen3_1p7b_unsloth_batch_outputs.json \
   --batch_size 4 \
   --max_new_tokens 64 \
@@ -213,7 +213,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
 ```bash
 CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
   --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
-  --input_file data/test.json \
+  --input_file outputs/processed_test_messages.json \
   --output_file outputs/qwen3_1p7b_unsloth_batch_outputs_repeat5.json \
   --batch_size 4 \
   --max_new_tokens 64 \
