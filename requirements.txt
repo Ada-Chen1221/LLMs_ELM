@@ -3,13 +3,19 @@
 # install command generated at https://pytorch.org/get-started/locally/.
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch==2.5.1+cu121
-transformers
-huggingface_hub
+
+# Unsloth stack for SFT + RL (GRPO). The notebook reference pins recent
+# Transformers / TRL versions; keep them explicit for reproducible servers.
+unsloth
+unsloth_zoo
+transformers==4.56.2
+trl==0.22.2
+huggingface_hub>=0.34.0
+datasets==4.3.0
 accelerate
-datasets
 peft
-trl
 bitsandbytes
+xformers
 sentencepiece
 protobuf
 safetensors
