@@ -21,8 +21,18 @@ def get_torch_dtype(dtype: str):
     raise ValueError(f"Unsupported dtype: {dtype}")
 
 
+def get_cuda_memory_info(device: int = 0) -> tuple[float, float]:
+    """Return ``(free_gib, total_gib)`` for one visible CUDA device."""
+    import torch
+
+    if not torch.cuda.is_available():
+        return 0.0, 0.0
+    free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+    return free_bytes / 1024**3, total_bytes / 1024**3
+
+
 def print_cuda_info() -> None:
-    """Print CUDA availability and visible GPU details."""
+    """Print CUDA availability, visible GPU details, and current free memory."""
     import torch
 
     print(f"CUDA available: {torch.cuda.is_available()}")
@@ -31,7 +41,35 @@ def print_cuda_info() -> None:
     for idx in range(gpu_count):
         props = torch.cuda.get_device_properties(idx)
         total_gb = props.total_memory / 1024**3
-        print(f"GPU {idx}: {props.name} ({total_gb:.1f} GiB)")
+        free_gb, _ = get_cuda_memory_info(idx)
+        print(f"GPU {idx}: {props.name} ({total_gb:.1f} GiB total, {free_gb:.1f} GiB free)")
+
+
+def require_min_cuda_memory(min_free_gb: float, device: int = 0, context: str = "this run") -> None:
+    """Fail early with a clear message when the selected visible GPU is already full.
+
+    CUDA OOM messages can be misleading when the notebook is attached to the
+    wrong physical GPU. This check runs before model loading so users see an
+    actionable error such as selecting another ``CUDA_VISIBLE_DEVICES`` value.
+    """
+    import os
+    import torch
+
+    if not torch.cuda.is_available() or min_free_gb <= 0:
+        return
+    free_gb, total_gb = get_cuda_memory_info(device)
+    if free_gb >= min_free_gb:
+        return
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "<not set>")
+    raise RuntimeError(
+        f"Not enough free CUDA memory for {context}: visible GPU {device} has "
+        f"{free_gb:.2f} GiB free / {total_gb:.2f} GiB total, but at least "
+        f"{min_free_gb:.2f} GiB was requested. CUDA_VISIBLE_DEVICES={visible!r}.\n"
+        "This usually means the selected physical GPU is already occupied. "
+        "Pick a freer GPU before starting Python/Jupyter, for example:\n"
+        "  CUDA_VISIBLE_DEVICES=1 jupyter notebook notebooks/unsloth_sft_grpo_qwen3.ipynb\n"
+        "or inspect/kill stale processes with nvidia-smi."
+    )
 
 
 def ensure_pad_token(tokenizer: Any) -> None:

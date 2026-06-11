@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from llm_lab.data import load_grpo_dataset  # noqa: E402
-from llm_lab.model_utils import ensure_pad_token, print_cuda_info  # noqa: E402
+from llm_lab.model_utils import ensure_pad_token, print_cuda_info, require_min_cuda_memory  # noqa: E402
 from llm_lab.unsloth_utils import (  # noqa: E402
     UnslothLoraConfig,
     add_unsloth_lora,
@@ -57,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--chat_template", default=None, help="Optional Unsloth template name, e.g. llama-3.1 or chatml.")
+    parser.add_argument("--min_free_gpu_memory_gb", type=float, default=8.0, help="Fail early if visible GPU 0 has less free memory before model loading. Set 0 to disable.")
     parser.add_argument(
         "--reward_type",
         default="contains",
@@ -119,6 +120,7 @@ def main() -> None:
     print(f"Train file: {args.train_file}")
     print(f"Output dir: {args.output_dir}")
     print_cuda_info()
+    require_min_cuda_memory(args.min_free_gpu_memory_gb, context="Unsloth GRPO training")
 
     fp16, bf16 = default_precision_flags(args.bf16, args.fp16)
     try:

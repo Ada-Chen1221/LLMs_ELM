@@ -228,7 +228,34 @@ python scripts/check_cuda.py
 
 确认 PyTorch CUDA build 不高于 NVIDIA 驱动支持版本。RTX 3090 服务器如果驱动只支持 CUDA 12.2 左右，通常不要安装 `+cu130` 的 torch wheel。
 
-### 2. 模型下载慢
+
+### 2. CUDA out of memory / GPU 只剩几百 MB
+
+如果错误类似：
+
+```text
+CUDA out of memory. Tried to allocate 608.00 MiB. GPU 0 has ... 300.62 MiB free.
+```
+
+这通常说明 **当前进程看到的 GPU 0 已经被别的进程占满**，而不是 Qwen3-1.7B 本身需要特别大的 batch。先用下面命令看物理 GPU 占用：
+
+```bash
+nvidia-smi
+```
+
+然后二选一：
+
+```bash
+# 推荐：启动 Jupyter/脚本前选择空闲物理 GPU，例如 1 号卡
+CUDA_VISIBLE_DEVICES=1 jupyter notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
+CUDA_VISIBLE_DEVICES=1 python scripts/train_lora.py --model_name_or_path model/Qwen3-1.7B
+```
+
+或在 notebook 第 0 个 code cell 中把 `SELECTED_GPU = "1"` 改成空闲 GPU 号，并 **Restart Kernel** 后从第 0 个 cell 重新运行。脚本和 notebook 现在都会在加载模型前检查可见 GPU 的空闲显存；如果太低，会提前给出选择 GPU 的提示。
+
+为了先跑通，notebook 默认使用较保守参数：`MAX_SEQ_LENGTH=512`、`INFER_BATCH_SIZE=1`。确认 GPU 空闲且流程跑通后，再逐步调大。
+
+### 3. 模型下载慢
 
 可预先下载模型：
 
@@ -246,6 +273,6 @@ CUDA_VISIBLE_DEVICES=0 python scripts/train_lora.py \
   --train_file data/toy_sft.jsonl
 ```
 
-### 3. GRPO reward 不涨
+### 4. GRPO reward 不涨
 
 先检查 reward 是否过稀疏。`contains` / `exact` 只是为了跑通管线的 baseline；正式实验需要更贴近任务目标的 reward，并且通常要跑足够多 step 才能观察趋势。

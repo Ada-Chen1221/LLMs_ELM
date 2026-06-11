@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from llm_lab.data import _apply_chat_template  # noqa: E402
-from llm_lab.model_utils import ensure_pad_token, print_cuda_info  # noqa: E402
+from llm_lab.model_utils import ensure_pad_token, print_cuda_info, require_min_cuda_memory  # noqa: E402
 from llm_lab.unsloth_utils import (  # noqa: E402
     apply_chat_template_if_requested,
     enable_unsloth_inference,
@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", default="auto", choices=["auto", "none", "float16", "bfloat16", "float32"])
     parser.add_argument("--load_in_4bit", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--chat_template", default=None, help="Optional Unsloth template name, e.g. llama-3.1 or chatml.")
+    parser.add_argument("--min_free_gpu_memory_gb", type=float, default=3.0, help="Fail early if visible GPU 0 has less free memory before model loading. Set 0 to disable.")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -149,6 +150,7 @@ def main() -> None:
     print(f"Loaded {len(rows)} prompts from {args.input_file}")
     print(f"Model or adapter: {args.model_name_or_path}")
     print_cuda_info()
+    require_min_cuda_memory(args.min_free_gpu_memory_gb, context="Unsloth batch inference")
 
     try:
         model, tokenizer = load_unsloth_model(

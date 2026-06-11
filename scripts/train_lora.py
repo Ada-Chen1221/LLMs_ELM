@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from llm_lab.data import load_sft_dataset  # noqa: E402
-from llm_lab.model_utils import ensure_pad_token, print_cuda_info  # noqa: E402
+from llm_lab.model_utils import ensure_pad_token, print_cuda_info, require_min_cuda_memory  # noqa: E402
 from llm_lab.train_utils import (  # noqa: E402
     ResponseOnlyDataCollator,
     build_sft_trainer,
@@ -54,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--chat_template", default=None, help="Optional Unsloth template name, e.g. llama-3.1 or chatml.")
+    parser.add_argument("--min_free_gpu_memory_gb", type=float, default=6.0, help="Fail early if visible GPU 0 has less free memory before model loading. Set 0 to disable.")
     parser.add_argument(
         "--loss_on_prompt",
         action="store_true",
@@ -112,6 +113,7 @@ def main() -> None:
         print("Warning: CUDA is not available. Unsloth training is intended for a CUDA GPU.")
     print_train_summary(args)
     print_cuda_info()
+    require_min_cuda_memory(args.min_free_gpu_memory_gb, context="Unsloth SFT/QLoRA training")
 
     try:
         model, tokenizer = load_unsloth_model(
