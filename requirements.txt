@@ -20,3 +20,7 @@ sentencepiece
 protobuf
 safetensors
 pyyaml
+
+# Notebook UI for running notebooks/unsloth_sft_grpo_qwen3.ipynb
+notebook
+ipykernel

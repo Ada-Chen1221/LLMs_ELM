@@ -48,12 +48,21 @@ README.md
 
 > `scripts/train_lora.py` 是主 SFT 入口；`scripts/train_qlora.py` 作为兼容入口，默认打开 `--load_in_4bit` 并调用同一套 Unsloth SFT 逻辑。
 
-如果你想像官方 Colab 参考代码那样在 notebook 里逐 cell 跑，直接打开。Notebook 默认会从 `model/Qwen3-1.7B` 读取本地模型：
+如果你想像官方 Colab 参考代码那样在 notebook 里逐 cell 跑，Notebook 默认会从 `model/Qwen3-1.7B` 读取本地模型。先确认当前环境有 notebook 入口：
 
 ```bash
-# 推荐：启动 Jupyter 前指定物理 GPU，例如使用 1 号卡
-CUDA_VISIBLE_DEVICES=1 jupyter notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
+# requirements.txt 已包含 notebook/ipykernel；如果你还没重装依赖，先执行：
+pip install notebook ipykernel
 ```
+
+然后推荐用 `python -m notebook` 启动（比直接调用 `jupyter` 命令更不依赖 PATH）：
+
+```bash
+# 推荐：启动 notebook 前指定物理 GPU，例如使用 1 号卡
+CUDA_VISIBLE_DEVICES=1 python -m notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
+```
+
+如果你更习惯 `jupyter notebook ...`，也可以在安装 `notebook` 后使用；若出现 `bash: jupyter: command not found`，就用上面的 `python -m notebook ...`。
 
 也可以在 notebook 第 0 个代码 cell 里设置 `SELECTED_GPU = "1"`；注意必须在 import `torch` / `unsloth` 之前设置，若已经运行过后面的 cell，请先 Restart Kernel。
 
