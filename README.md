@@ -1,6 +1,6 @@
 # LLM Lab: Unsloth SFT / RL 训练脚手架
 
-这个仓库现在改成 **Unsloth 优先** 的实验脚手架，目标是只做模型外部的 LoRA/QLoRA SFT 与 RL（GRPO）训练，不修改模型内部结构。默认模型路径是你已下载好的本地目录 `model/Qwen3-1.7B`；训练时仍可通过 `--load_in_4bit` 让 Unsloth 以 4-bit 方式加载，适合在 RTX 3090 这类单卡环境中先跑通 LoRA/QLoRA。
+这个仓库现在改成 **Unsloth 优先** 的实验脚手架，目标是只做模型外部的 LoRA/QLoRA SFT 与 RL（GRPO）训练，不修改模型内部结构。默认模型路径是你已下载好的本地目录 `models/Qwen3-1.7B`；训练时仍可通过 `--load_in_4bit` 让 Unsloth 以 4-bit 方式加载，适合在 RTX 3090 这类单卡环境中先跑通 LoRA/QLoRA。
 
 参考的官方 Unsloth conversational notebook 使用了以下核心流程：
 
@@ -49,7 +49,7 @@ README.md
 
 > `scripts/train_lora.py` 是主 SFT 入口；`scripts/train_qlora.py` 作为兼容入口，默认打开 `--load_in_4bit` 并调用同一套 Unsloth SFT 逻辑。
 
-如果你想像官方 Colab 参考代码那样在 notebook 里逐 cell 跑，Notebook 默认会从 `model/Qwen3-1.7B` 读取本地模型。**不要重新创建环境**；把你已经装好依赖的当前 conda 环境注册成 Jupyter kernel 即可：
+如果你想像官方 Colab 参考代码那样在 notebook 里逐 cell 跑，Notebook 默认会从 `models/Qwen3-1.7B` 读取本地模型。**不要重新创建环境**；把你已经装好依赖的当前 conda 环境注册成 Jupyter kernel 即可：
 
 ```bash
 conda activate llm-lab   # 换成你现在已经装好依赖的环境名
@@ -74,7 +74,7 @@ CUDA_VISIBLE_DEVICES=1 python -m notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
 
 这个 notebook 里保留了 Unsloth 原生写法：`FastLanguageModel.from_pretrained(...)`、`FastLanguageModel.get_peft_model(...)`、TRL `SFTTrainer/GRPOTrainer`、response-only 与 full-loss SFT、保存/合并 adapter、单条推理、批量推理、JSON/JSONL 读写与 GRPO reward 示例。
 
-> 你的实验数据如果已经拆成 `train.json` / `test.json` 两个 JSON array，推荐先用 notebook：它会先把原始 `prompt` + 答案字段（默认候选：`groundtruth` / `response` / `answer` / `label` / `output` / `completion`）转换成标准 `messages` SFT 数据，再用 `TRAIN_FILE` 做 SFT、用 `TEST_FILE` 做批量推理，输出时保留原始元数据并新增 `model_output` / `parsed_score`。Qwen3 的 `<think>...</think>` 会默认通过 `enable_thinking=False` 关闭，避免训练文本里混入空 thinking 标签。
+> 你的实验数据如果已经放在 `data/split_data/toy_train.json` 这类 JSON array，推荐先用 notebook：它会先把原始数据清洗成只保留 `prompt_id` / `claim_id` / `prompt` / `groundtruth` / `condition` 的 processed JSON，再用 processed train 做 SFT、processed test 做批量推理；预测输出也只保留这些关键字段并新增 `model_output` / `parsed_score`。Qwen3 的 `<think>...</think>` 会默认通过 `enable_thinking=False` 关闭，避免训练文本里混入空 thinking 标签。
 
 ## 创建环境与安装依赖
 
@@ -200,7 +200,7 @@ batch infer 没有删：原来的 `scripts/batch_infer_transformers.py` 还在�
 ```bash
 CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
   --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
-  --input_file outputs/processed_test_messages.json \
+  --input_file data/processed_data/processed_test_messages.json \
   --output_file outputs/qwen3_1p7b_unsloth_batch_outputs.json \
   --batch_size 4 \
   --max_new_tokens 64 \
@@ -213,7 +213,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
 ```bash
 CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
   --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
-  --input_file outputs/processed_test_messages.json \
+  --input_file data/processed_data/processed_test_messages.json \
   --output_file outputs/qwen3_1p7b_unsloth_batch_outputs_repeat5.json \
   --batch_size 4 \
   --max_new_tokens 64 \

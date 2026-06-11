@@ -30,7 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--messages_field", default="messages")
     parser.add_argument("--split_field", default=None, help="Optional field used to filter rows, e.g. split.")
     parser.add_argument("--split", default=None, help="Optional split value to keep, e.g. test.")
-    parser.add_argument("--output_field", default="output", help="Field added to each original row with model output.")
+    parser.add_argument("--output_field", default="model_output", help="Field added to each output row with model output.")
+    parser.add_argument(
+        "--keep_input_fields",
+        default="prompt_id,claim_id,prompt,groundtruth,condition",
+        help="Comma-separated input fields to keep in outputs. Set to empty string to keep all input fields.",
+    )
     parser.add_argument("--output_format", choices=["auto", "json", "jsonl"], default="auto")
     parser.add_argument("--system_prompt", default=None)
     parser.add_argument("--batch_size", type=int, default=4)
@@ -78,6 +83,21 @@ def read_records(path: str | Path) -> list[dict[str, Any]]:
         if not isinstance(row, dict):
             raise ValueError(f"Input item {idx} in {input_path} must be a JSON object.")
     return rows
+
+
+
+
+def parse_keep_fields(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    fields = [field.strip() for field in value.split(",") if field.strip()]
+    return fields or None
+
+
+def compact_output_row(row: dict[str, Any], keep_fields: list[str] | None) -> dict[str, Any]:
+    if keep_fields is None:
+        return dict(row)
+    return {field: row[field] for field in keep_fields if field in row}
 
 
 def infer_output_format(output_path: Path, output_format: str) -> str:
@@ -254,9 +274,10 @@ def main() -> None:
             outputs_by_row[row_idx].append(response.strip())
         print(f"Processed generations {min(start + len(chunk), len(work_items))}/{len(work_items)}", flush=True)
 
+    keep_fields = parse_keep_fields(args.keep_input_fields)
     results: list[dict[str, Any]] = []
     for row, row_outputs in zip(rows, outputs_by_row):
-        output = dict(row)
+        output = compact_output_row(row, keep_fields)
         output[args.output_field] = row_outputs if args.num_repeats > 1 or args.always_list_output else row_outputs[0]
         results.append(output)
 
