@@ -533,6 +533,41 @@ CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes=2 scripts/train_qlora
   --gradient_checkpointing
 ```
 
+### 你的全量数据 40 epoch 双卡 QLoRA 示例
+
+如果你要用 `models/Qwen3-4B-Instruct-2507` 在全量训练集上跑 40 epoch，建议先用比较保守、可复现的双卡设置：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes=2 scripts/train_qlora.py \
+  --model_name_or_path models/Qwen3-4B-Instruct-2507 \
+  --train_file data/split_data/train_lowinv_sft.json \
+  --prompt_field prompt \
+  --response_field groundtruth \
+  --output_dir outputs/qwen3_4b_qlora_sft_maskedlowinv_40ep_2gpu_response_only \
+  --num_train_epochs 40 \
+  --learning_rate 2e-4 \
+  --max_length 256 \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 2 \
+  --gradient_checkpointing
+```
+
+双卡时有效 batch size 的计算方式是：
+
+```text
+effective_batch_size = per_device_train_batch_size * gradient_accumulation_steps * GPU数量
+```
+
+例如：
+
+- 单卡 `per_device_train_batch_size=1`、`gradient_accumulation_steps=4`：有效 batch size = `1 * 4 * 1 = 4`。
+- 双卡若想保持同样有效 batch size，用 `per_device_train_batch_size=1`、`gradient_accumulation_steps=2`：有效 batch size = `1 * 2 * 2 = 4`。
+- 双卡若用 `per_device_train_batch_size=1`、`gradient_accumulation_steps=4`：有效 batch size = `1 * 4 * 2 = 8`，速度可能更快，但优化动态会变，和单卡设置不完全可比。
+
+如果显存还有余量，可以再尝试把 `--per_device_train_batch_size` 从 `1` 提到 `2` 或 `4`；如果 OOM，就先保持 `1`。不建议一开始直接设到 `10`，除非已经确认每张 3090 都能稳定容纳该 micro batch。
+
+训练启动时应看到两份进程日志，并且每个进程绑定一张可见 GPU。当前训练默认是 response-only loss；不要加 `--loss_on_prompt`，除非你明确想回到旧的全序列 loss。
+
 如果只想让脚本看到第 2、3 张物理卡，可以使用：
 
 ```bash
