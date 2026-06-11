@@ -5,23 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 
-def configure_visible_gpu(gpu_id: str | None) -> None:
-    """Restrict this process to one physical GPU before importing torch/unsloth.
-
-    Unsloth follows PyTorch's CUDA visibility. For single-GPU training, the
-    reliable way to place the run on a physical GPU is to set
-    ``CUDA_VISIBLE_DEVICES`` before CUDA is initialized. The selected physical
-    GPU is then exposed inside the process as ``cuda:0``.
-    """
-    if gpu_id is None or str(gpu_id).strip() == "":
-        return
-    import os
-
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id).strip()
-    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-
-
 def get_torch_dtype(dtype: str):
     """Map a CLI dtype string to a torch dtype or ``"auto"``."""
     import torch
@@ -84,7 +67,7 @@ def require_min_cuda_memory(min_free_gb: float, device: int = 0, context: str = 
         f"{min_free_gb:.2f} GiB was requested. CUDA_VISIBLE_DEVICES={visible!r}.\n"
         "This usually means the selected physical GPU is already occupied. "
         "Pick a freer GPU before starting Python/Jupyter, for example:\n"
-        "  python scripts/launch_notebook.py --gpu_id 1\n"
+        "  CUDA_VISIBLE_DEVICES=1 jupyter notebook notebooks/unsloth_sft_grpo_qwen3.ipynb\n"
         "or inspect/kill stale processes with nvidia-smi."
     )
 

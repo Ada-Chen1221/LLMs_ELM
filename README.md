@@ -62,14 +62,12 @@ python -m pip install ipykernel
 python scripts/register_jupyter_kernel.py --name llm-lab --display-name "Python (llm-lab)"
 ```
 
-然后用任意已有 Jupyter 服务打开 notebook，并在页面菜单里选择：`Kernel -> Change Kernel -> Python (llm-lab)`。如果当前环境本身也装了 notebook，最省事的方式是用仓库提供的启动脚本直接指定物理 GPU：
+然后用任意已有 Jupyter 服务打开 notebook，并在页面菜单里选择：`Kernel -> Change Kernel -> Python (llm-lab)`。如果当前环境本身也装了 notebook，可以这样启动；若没有 `jupyter` 命令，优先用 `python -m notebook`：
 
 ```bash
-# 使用物理 1 号卡；进入 notebook 后它会显示为 cuda:0
-python scripts/launch_notebook.py --gpu_id 1
+# 推荐：启动 notebook 前指定物理 GPU，例如使用 1 号卡
+CUDA_VISIBLE_DEVICES=1 python -m notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
 ```
-
-这和手写 `CUDA_VISIBLE_DEVICES=1 python -m notebook ...` 等价，但不需要记命令。
 
 如果服务器已经有公共 Jupyter/JupyterLab，也可以不用在 `llm-lab` 里安装 notebook；只要上面注册了 kernel，打开页面后切到 `Python (llm-lab)` 即可。GPU 仍然建议在启动 Jupyter 服务前指定，或者在 notebook 第 0 个代码 cell 里设置 `SELECTED_GPU = "1"`；注意必须在 import `torch` / `unsloth` 之前设置，若已经运行过后面的 cell，请先 Restart Kernel。
 
@@ -119,8 +117,7 @@ GRPO / RL 使用同一份 `prompt + groundtruth` 或 `messages` 数据。脚本�
 默认 4-bit LoRA SFT：
 
 ```bash
-python scripts/train_lora.py \
-  --gpu_id 1 \
+CUDA_VISIBLE_DEVICES=0 python scripts/train_lora.py \
   --model_name_or_path model/Qwen3-1.7B \
   --train_file data/toy_sft.jsonl \
   --output_dir outputs/qwen3_1p7b_unsloth_lora \
@@ -132,8 +129,7 @@ python scripts/train_lora.py \
 兼容旧命令的 QLoRA 入口：
 
 ```bash
-python scripts/train_qlora.py \
-  --gpu_id 1 \
+CUDA_VISIBLE_DEVICES=0 python scripts/train_qlora.py \
   --model_name_or_path model/Qwen3-1.7B \
   --train_file data/toy_sft.jsonl \
   --output_dir outputs/qwen3_1p7b_unsloth_qlora
@@ -152,8 +148,7 @@ python scripts/train_qlora.py \
 仓库新增了一个轻量 GRPO 入口，适合先验证 RL 管线。默认内置 reward 是 `contains`：如果标准答案出现在模型输出中，reward 为 1，否则为 0。
 
 ```bash
-python scripts/train_grpo.py \
-  --gpu_id 1 \
+CUDA_VISIBLE_DEVICES=0 python scripts/train_grpo.py \
   --model_name_or_path model/Qwen3-1.7B \
   --train_file data/toy_sft.jsonl \
   --output_dir outputs/qwen3_1p7b_unsloth_grpo \
@@ -180,8 +175,7 @@ python scripts/train_grpo.py \
 训练后直接加载 adapter 目录做单条推理：
 
 ```bash
-python scripts/infer_lora.py \
-  --gpu_id 1 \
+CUDA_VISIBLE_DEVICES=0 python scripts/infer_lora.py \
   --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
   --prompt "请用一句话解释什么是大语言模型。" \
   --max_new_tokens 128
@@ -190,8 +184,7 @@ python scripts/infer_lora.py \
 如果需要使用特定 chat template：
 
 ```bash
-python scripts/infer_lora.py \
-  --gpu_id 1 \
+CUDA_VISIBLE_DEVICES=0 python scripts/infer_lora.py \
   --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
   --chat_template chatml \
   --prompt "请给出一个简短回答。"
@@ -202,8 +195,7 @@ python scripts/infer_lora.py \
 batch infer 没有删：原来的 `scripts/batch_infer_transformers.py` 还在；这次另外补了 Unsloth/LoRA adapter 版本 `scripts/batch_infer_lora.py`，用于直接加载 Unsloth 训练保存的 adapter 目录。输入支持 JSON array 和 JSONL，字段可以是 `prompt` 或 `messages`。
 
 ```bash
-python scripts/batch_infer_lora.py \
-  --gpu_id 1 \
+CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
   --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
   --input_file data/prompts.json \
   --output_file outputs/qwen3_1p7b_unsloth_batch_outputs.json \
@@ -216,8 +208,7 @@ python scripts/batch_infer_lora.py \
 如果每条 prompt 需要重复生成多次，用 `--num_repeats`：
 
 ```bash
-python scripts/batch_infer_lora.py \
-  --gpu_id 1 \
+CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
   --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
   --input_file data/prompts.json \
   --output_file outputs/qwen3_1p7b_unsloth_batch_outputs_repeat5.json \
@@ -269,12 +260,12 @@ nvidia-smi
 然后二选一：
 
 ```bash
-# 推荐：脚本直接用 --gpu_id 选择物理 GPU，例如 1 号卡
-python scripts/train_lora.py --gpu_id 1 --model_name_or_path model/Qwen3-1.7B
-python scripts/launch_notebook.py --gpu_id 1
+# 推荐：启动 Jupyter/脚本前选择空闲物理 GPU，例如 1 号卡
+CUDA_VISIBLE_DEVICES=1 jupyter notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
+CUDA_VISIBLE_DEVICES=1 python scripts/train_lora.py --model_name_or_path model/Qwen3-1.7B
 ```
 
-脚本里的 `--gpu_id 1` 会在 import `torch/unsloth` 之前自动设置 `CUDA_VISIBLE_DEVICES=1`。如果已经打开了 notebook，也可以在第 0 个 code cell 中把 `SELECTED_GPU = "1"` 改成空闲 GPU 号，并 **Restart Kernel** 后从第 0 个 cell 重新运行。脚本和 notebook 现在都会在加载模型前检查可见 GPU 的空闲显存；如果太低，会提前给出选择 GPU 的提示。
+或在 notebook 第 0 个 code cell 中把 `SELECTED_GPU = "1"` 改成空闲 GPU 号，并 **Restart Kernel** 后从第 0 个 cell 重新运行。脚本和 notebook 现在都会在加载模型前检查可见 GPU 的空闲显存；如果太低，会提前给出选择 GPU 的提示。
 
 为了先跑通，notebook 默认使用较保守参数：`MAX_SEQ_LENGTH=512`、`INFER_BATCH_SIZE=1`。确认 GPU 空闲且流程跑通后，再逐步调大。
 
@@ -291,8 +282,7 @@ python scripts/download_model.py \
 然后训练时传本地路径：
 
 ```bash
-python scripts/train_lora.py \
-  --gpu_id 1 \
+CUDA_VISIBLE_DEVICES=0 python scripts/train_lora.py \
   --model_name_or_path model/Qwen3-1.7B \
   --train_file data/toy_sft.jsonl
 ```
