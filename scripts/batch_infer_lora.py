@@ -124,6 +124,40 @@ def batched(items: list[Any], size: int):
         yield start, items[start : start + size]
 
 
+
+def left_pad_tokenize(tokenizer, texts: list[str]) -> dict[str, Any]:
+    """Tokenize pre-rendered prompts and left-pad manually for decoder-only generation.
+
+    Some tokenizer instances still right-pad despite setting ``padding_side``.
+    Manual left padding avoids Transformers' decoder-only right-padding warning
+    and keeps generation aligned for mixed-length batches.
+    """
+    import torch
+
+    pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    if pad_token_id is None:
+        raise ValueError("Tokenizer must define pad_token_id or eos_token_id for batch inference padding.")
+
+    encoded = [
+        tokenizer(text, add_special_tokens=False, return_attention_mask=True)
+        for text in texts
+    ]
+    max_len = max(len(item["input_ids"]) for item in encoded)
+    input_ids: list[list[int]] = []
+    attention_mask: list[list[int]] = []
+    for item in encoded:
+        ids = item["input_ids"]
+        mask = item.get("attention_mask", [1] * len(ids))
+        pad_len = max_len - len(ids)
+        input_ids.append([pad_token_id] * pad_len + ids)
+        attention_mask.append([0] * pad_len + mask)
+
+    return {
+        "input_ids": torch.tensor(input_ids, dtype=torch.long),
+        "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+    }
+
+
 def build_work_items(texts: list[str], num_repeats: int) -> list[tuple[int, str]]:
     if num_repeats < 1:
         raise ValueError("--num_repeats must be >= 1")
@@ -196,7 +230,7 @@ def main() -> None:
     for start, chunk in batched(work_items, args.batch_size):
         chunk_row_indices = [row_idx for row_idx, _ in chunk]
         chunk_texts = [text for _, text in chunk]
-        inputs = tokenizer(chunk_texts, return_tensors="pt", padding=True)
+        inputs = left_pad_tokenize(tokenizer, chunk_texts)
         if torch.cuda.is_available():
             inputs = {key: value.to("cuda") for key, value in inputs.items()}
 
