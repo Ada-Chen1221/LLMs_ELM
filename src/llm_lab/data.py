@@ -7,13 +7,26 @@ from pathlib import Path
 from typing import Any
 
 
-def _apply_chat_template(tokenizer: Any, messages: list[dict[str, str]], add_generation_prompt: bool) -> str:
+def _apply_chat_template(
+    tokenizer: Any,
+    messages: list[dict[str, str]],
+    add_generation_prompt: bool,
+    enable_thinking: bool = False,
+) -> str:
     if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=add_generation_prompt,
-        )
+        kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": add_generation_prompt,
+            "enable_thinking": enable_thinking,
+        }
+        try:
+            return tokenizer.apply_chat_template(messages, **kwargs)
+        except TypeError as exc:
+            # Older/non-Qwen chat templates do not accept enable_thinking.
+            if "enable_thinking" not in str(exc):
+                raise
+            kwargs.pop("enable_thinking")
+            return tokenizer.apply_chat_template(messages, **kwargs)
     rendered: list[str] = []
     for message in messages:
         role = message.get("role")
@@ -26,8 +39,8 @@ def _apply_chat_template(tokenizer: Any, messages: list[dict[str, str]], add_gen
     return "\n".join(rendered)
 
 
-def _format_messages(tokenizer: Any, messages: list[dict[str, str]]) -> str:
-    return _apply_chat_template(tokenizer, messages, add_generation_prompt=False)
+def _format_messages(tokenizer: Any, messages: list[dict[str, str]], enable_thinking: bool = False) -> str:
+    return _apply_chat_template(tokenizer, messages, add_generation_prompt=False, enable_thinking=enable_thinking)
 
 
 def _read_json_or_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -78,11 +91,22 @@ def _prompt_response_to_texts(
     tokenizer: Any,
     prompt_messages: list[dict[str, str]],
     assistant_message: dict[str, str],
+    enable_thinking: bool = False,
 ) -> tuple[str, str]:
     """Return ``(full_text, prompt_text)`` for response-only supervised loss."""
-    prompt_text = _apply_chat_template(tokenizer, prompt_messages, add_generation_prompt=True)
+    prompt_text = _apply_chat_template(
+        tokenizer,
+        prompt_messages,
+        add_generation_prompt=True,
+        enable_thinking=enable_thinking,
+    )
     full_messages = [*prompt_messages, assistant_message]
-    full_text = _apply_chat_template(tokenizer, full_messages, add_generation_prompt=False)
+    full_text = _apply_chat_template(
+        tokenizer,
+        full_messages,
+        add_generation_prompt=False,
+        enable_thinking=enable_thinking,
+    )
 
     # Most chat templates make full_text start with prompt_text. Keep an explicit
     # fallback for simple/manual templates so label masking still works.
@@ -97,6 +121,7 @@ def example_to_text(
     tokenizer: Any,
     prompt_field: str = "prompt",
     response_field: str = "groundtruth",
+    enable_thinking: bool = False,
 ) -> str:
     """Convert one supported JSON object to a training text string."""
     text = example.get("text")
@@ -105,7 +130,7 @@ def example_to_text(
 
     messages = example.get("messages")
     if isinstance(messages, list) and messages:
-        return _format_messages(tokenizer, messages)
+        return _format_messages(tokenizer, messages, enable_thinking=enable_thinking)
 
     prompt = example.get(prompt_field)
     response = example.get(response_field)
@@ -116,6 +141,7 @@ def example_to_text(
                 {"role": "user", "content": prompt},
                 {"role": "assistant", "content": response},
             ],
+            enable_thinking=enable_thinking,
         )
 
     raise ValueError(
@@ -130,6 +156,7 @@ def example_to_response_only_texts(
     tokenizer: Any,
     prompt_field: str = "prompt",
     response_field: str = "groundtruth",
+    enable_thinking: bool = False,
 ) -> tuple[str, str]:
     """Convert one example to ``(full_text, prompt_text)`` for response-only loss.
 
@@ -140,7 +167,7 @@ def example_to_response_only_texts(
     messages = example.get("messages")
     if isinstance(messages, list) and messages:
         prompt_messages, assistant_message = _split_messages_for_response_loss(messages)
-        return _prompt_response_to_texts(tokenizer, prompt_messages, assistant_message)
+        return _prompt_response_to_texts(tokenizer, prompt_messages, assistant_message, enable_thinking=enable_thinking)
 
     prompt = example.get(prompt_field)
     response = example.get(response_field)
@@ -149,6 +176,7 @@ def example_to_response_only_texts(
             tokenizer,
             [{"role": "user", "content": prompt}],
             {"role": "assistant", "content": response},
+            enable_thinking=enable_thinking,
         )
 
     text = example.get("text")
@@ -172,6 +200,7 @@ def load_sft_dataset(
     split_field: str | None = None,
     split: str | None = None,
     response_only_loss: bool = True,
+    enable_thinking: bool = False,
 ):
     """Load JSON/JSONL SFT data.
 
@@ -191,10 +220,26 @@ def load_sft_dataset(
     for idx, obj in enumerate(raw_rows):
         try:
             if response_only_loss:
-                text, prompt_text = example_to_response_only_texts(obj, tokenizer, prompt_field, response_field)
+                text, prompt_text = example_to_response_only_texts(
+                    obj,
+                    tokenizer,
+                    prompt_field,
+                    response_field,
+                    enable_thinking=enable_thinking,
+                )
                 rows.append({"text": text, "prompt_text": prompt_text})
             else:
-                rows.append({"text": example_to_text(obj, tokenizer, prompt_field, response_field)})
+                rows.append(
+                    {
+                        "text": example_to_text(
+                            obj,
+                            tokenizer,
+                            prompt_field,
+                            response_field,
+                            enable_thinking=enable_thinking,
+                        )
+                    }
+                )
         except ValueError as exc:
             raise ValueError(f"Invalid SFT example at index {idx} of {path}: {exc}") from exc
 

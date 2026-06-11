@@ -74,7 +74,7 @@ CUDA_VISIBLE_DEVICES=1 python -m notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
 
 这个 notebook 里保留了 Unsloth 原生写法：`FastLanguageModel.from_pretrained(...)`、`FastLanguageModel.get_peft_model(...)`、TRL `SFTTrainer/GRPOTrainer`、response-only 与 full-loss SFT、保存/合并 adapter、单条推理、批量推理、JSON/JSONL 读写与 GRPO reward 示例。
 
-> 你的实验数据如果已经拆成 `train.json` / `test.json` 两个 JSON array，推荐先用 notebook：它会先把原始 `prompt` + 答案字段（默认候选：`groundtruth` / `response` / `answer` / `label` / `output` / `completion`）转换成标准 `messages` SFT 数据，再用 `TRAIN_FILE` 做 SFT、用 `TEST_FILE` 做批量推理，输出时保留原始元数据并新增 `model_output` / `parsed_score`。
+> 你的实验数据如果已经拆成 `train.json` / `test.json` 两个 JSON array，推荐先用 notebook：它会先把原始 `prompt` + 答案字段（默认候选：`groundtruth` / `response` / `answer` / `label` / `output` / `completion`）转换成标准 `messages` SFT 数据，再用 `TRAIN_FILE` 做 SFT、用 `TEST_FILE` 做批量推理，输出时保留原始元数据并新增 `model_output` / `parsed_score`。Qwen3 的 `<think>...</think>` 会默认通过 `enable_thinking=False` 关闭，避免训练文本里混入空 thinking 标签。
 
 ## 创建环境与安装依赖
 
