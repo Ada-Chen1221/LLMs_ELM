@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from llm_lab.data import _apply_chat_template  # noqa: E402
-from llm_lab.model_utils import ensure_pad_token, print_cuda_info, require_min_cuda_memory  # noqa: E402
+from llm_lab.model_utils import ensure_pad_token, configure_visible_gpu, print_cuda_info, require_min_cuda_memory  # noqa: E402
 from llm_lab.unsloth_utils import (  # noqa: E402
     apply_chat_template_if_requested,
     enable_unsloth_inference,
@@ -24,6 +24,7 @@ from llm_lab.unsloth_utils import (  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Batch inference with an Unsloth model or saved LoRA adapter.")
     parser.add_argument("--model_name_or_path", default="outputs/qwen3_1p7b_unsloth_lora")
+    parser.add_argument("--gpu_id", default=None, help="Physical GPU id to use, e.g. 0 or 1. Sets CUDA_VISIBLE_DEVICES before torch/unsloth import.")
     parser.add_argument("--input_file", default="data/prompts.json")
     parser.add_argument("--output_file", default="outputs/batch_unsloth_outputs.json")
     parser.add_argument("--prompt_field", default="prompt")

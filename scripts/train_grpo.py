@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from llm_lab.data import load_grpo_dataset  # noqa: E402
-from llm_lab.model_utils import ensure_pad_token, print_cuda_info, require_min_cuda_memory  # noqa: E402
+from llm_lab.model_utils import ensure_pad_token, configure_visible_gpu, print_cuda_info, require_min_cuda_memory  # noqa: E402
 from llm_lab.unsloth_utils import (  # noqa: E402
     UnslothLoraConfig,
     add_unsloth_lora,
@@ -29,6 +29,7 @@ DEFAULT_TARGET_MODULES = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_pro
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a LoRA adapter with Unsloth + TRL GRPO.")
     parser.add_argument("--model_name_or_path", default="model/Qwen3-1.7B")
+    parser.add_argument("--gpu_id", default=None, help="Physical GPU id to use, e.g. 0 or 1. Sets CUDA_VISIBLE_DEVICES before torch/unsloth import.")
     parser.add_argument("--train_file", default="data/toy_sft.jsonl")
     parser.add_argument("--prompt_field", default="prompt")
     parser.add_argument("--answer_field", default="groundtruth")
@@ -108,6 +109,7 @@ def make_reward_func(reward_type: str):
 
 def main() -> None:
     args = parse_args()
+    configure_visible_gpu(args.gpu_id)
     try:
         import torch
         from unsloth import FastLanguageModel, PatchFastRL
