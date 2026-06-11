@@ -51,8 +51,11 @@ README.md
 如果你想像官方 Colab 参考代码那样在 notebook 里逐 cell 跑，直接打开。Notebook 默认会从 `model/Qwen3-1.7B` 读取本地模型：
 
 ```bash
-jupyter notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
+# 推荐：启动 Jupyter 前指定物理 GPU，例如使用 1 号卡
+CUDA_VISIBLE_DEVICES=1 jupyter notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
 ```
+
+也可以在 notebook 第 0 个代码 cell 里设置 `SELECTED_GPU = "1"`；注意必须在 import `torch` / `unsloth` 之前设置，若已经运行过后面的 cell，请先 Restart Kernel。
 
 这个 notebook 里保留了 Unsloth 原生写法：`FastLanguageModel.from_pretrained(...)`、`FastLanguageModel.get_peft_model(...)`、TRL `SFTTrainer/GRPOTrainer`、response-only 与 full-loss SFT、保存/合并 adapter、单条推理、批量推理、JSON/JSONL 读写与 GRPO reward 示例。
 
