@@ -325,7 +325,11 @@ CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_transformers.py \
 ]
 ```
 
-训练脚本会把它转换成 chat SFT 文本：`user=prompt`，`assistant=groundtruth`。如果 tokenizer 支持 chat template，会自动使用 `apply_chat_template(..., add_generation_prompt=False)`。仓库提供了同格式示例 `data/sft_prompt_groundtruth.json`。
+训练脚本会把它转换成 chat SFT 文本：`user=prompt`，`assistant=groundtruth`。如果 tokenizer 支持 chat template，会自动使用 `apply_chat_template`。仓库提供了同格式示例 `data/sft_prompt_groundtruth.json`。
+
+默认训练现在使用 **response-only loss**：模型输入仍然包含完整 prompt + groundtruth，但 labels 会把 prompt 部分全部置为 `-100`，因此 loss 只在 assistant response / `groundtruth` token 上计算。这样可以避免模型主要学会复读长 prompt，而没有真正优化目标答案。如果你确实想回到旧的“prompt + response 全部算 loss”行为，可以显式加 `--loss_on_prompt`。
+
+如果你之前已经用旧脚本训练过一批 adapter，建议先用新逻辑从 base model 重新训练一版做对比；旧 adapter 的 loss 优化目标已经不一致，继续训练也可以，但通常不如直接按 response-only loss 重训干净。
 
 LoRA 训练示例：
 
@@ -368,6 +372,8 @@ CUDA_VISIBLE_DEVICES=0 python scripts/train_qlora.py \
 - `--prompt_field prompt`：输入 prompt 字段名。
 - `--response_field groundtruth`：监督目标字段名。
 - `--split_field split --split train`：可选，只训练 `split == "train"` 的样本。
+- 默认只对 response / `groundtruth` 计算 loss；prompt token 会被 mask 成 `-100`。
+- `--loss_on_prompt`：可选，恢复旧行为，让 prompt 和 response 都参与 loss。一般不建议在你的 Likert / groundtruth 监督任务里使用。
 - 如果你的字段名不同，只需要改这几个参数，不需要改代码。
 
 ## 从 checkpoint 或已有 adapter 继续训练

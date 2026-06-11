@@ -120,6 +120,80 @@ def get_training_args(
     return args
 
 
+class ResponseOnlyDataCollator:
+    """Tokenize SFT rows and mask prompt tokens with ``-100`` labels.
+
+    Each dataset row must contain:
+    - ``text``: full chat-formatted prompt + assistant response
+    - ``prompt_text``: the prompt prefix before the assistant response
+
+    The model still receives the full sequence as input, but the loss is only
+    computed on labels after ``prompt_text``.
+    """
+
+    def __init__(self, tokenizer, max_length: int):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __call__(self, features):
+        import torch
+
+        texts = [feature["text"] for feature in features]
+        prompt_texts = [feature.get("prompt_text", "") for feature in features]
+        batch = self.tokenizer(
+            texts,
+            add_special_tokens=False,
+            max_length=self.max_length,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+        )
+        labels = batch["input_ids"].clone()
+        for row_idx, prompt_text in enumerate(prompt_texts):
+            if prompt_text:
+                prompt_ids = self.tokenizer(
+                    prompt_text,
+                    add_special_tokens=False,
+                    max_length=self.max_length,
+                    truncation=True,
+                )["input_ids"]
+                nonpad_positions = batch["attention_mask"][row_idx].nonzero(as_tuple=False).flatten()
+                if len(nonpad_positions) > 0:
+                    prompt_start = int(nonpad_positions[0].item())
+                    prompt_end = min(prompt_start + len(prompt_ids), labels.shape[1])
+                    labels[row_idx, prompt_start:prompt_end] = -100
+            labels[row_idx, batch["attention_mask"][row_idx] == 0] = -100
+            if torch.all(labels[row_idx] == -100):
+                raise ValueError(
+                    "A training example has no response tokens left after prompt masking/truncation. "
+                    "Increase --max_length or shorten the prompt."
+                )
+        batch["labels"] = labels
+        return batch
+
+
+def build_response_only_trainer(model, tokenizer, train_dataset, training_args, peft_config=None):
+    """Build a Transformers Trainer that computes loss only on response tokens."""
+    from transformers import Trainer
+
+    if peft_config is not None:
+        try:
+            from peft import get_peft_model
+        except ImportError as exc:
+            raise ImportError("Please install peft: pip install peft") from exc
+        model = get_peft_model(model, peft_config)
+
+    max_length = getattr(training_args, "max_length", None)
+    if max_length is None:
+        raise ValueError("training_args must provide max_length for response-only training.")
+    return Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        data_collator=ResponseOnlyDataCollator(tokenizer, max_length=max_length),
+    )
+
+
 def build_sft_trainer(model, tokenizer, train_dataset, training_args, peft_config=None):
     try:
         from trl import SFTTrainer
@@ -181,4 +255,7 @@ def print_train_summary(args) -> None:
         print(f"Resume from checkpoint: {resume_from_checkpoint}")
     if adapter_path:
         print(f"Continue from adapter: {adapter_path}")
+    if hasattr(args, "loss_on_prompt"):
+        loss_mode = "full prompt + response" if args.loss_on_prompt else "response only (prompt labels = -100)"
+        print(f"Loss mode: {loss_mode}")
     print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', '<not set>')}")

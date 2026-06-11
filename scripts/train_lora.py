@@ -15,6 +15,7 @@ from llm_lab.model_utils import ensure_pad_token, maybe_enable_gradient_checkpoi
 from llm_lab.train_utils import (  # noqa: E402
     LoraCliConfig,
     build_lora_config,
+    build_response_only_trainer,
     build_sft_trainer,
     cast_trainable_parameters_to_fp32,
     get_training_args,
@@ -65,6 +66,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--gradient_checkpointing", action="store_true")
+    parser.add_argument(
+        "--loss_on_prompt",
+        action="store_true",
+        help="Compute SFT loss on prompt tokens too. Default is response-only loss.",
+    )
     return parser.parse_args()
 
 
@@ -128,6 +134,7 @@ def main() -> None:
         response_field=args.response_field,
         split_field=args.split_field,
         split=args.split,
+        response_only_loss=not args.loss_on_prompt,
     )
     lora_config = None if args.adapter_path else build_lora_config(
         LoraCliConfig(
@@ -147,7 +154,12 @@ def main() -> None:
         fp16=args.fp16,
         bf16=args.bf16,
     )
-    trainer = build_sft_trainer(model, tokenizer, train_dataset, training_args, lora_config)
+    if args.loss_on_prompt:
+        print("Training with loss on full prompt + response tokens (--loss_on_prompt).", flush=True)
+        trainer = build_sft_trainer(model, tokenizer, train_dataset, training_args, lora_config)
+    else:
+        print("Training with response-only loss: prompt tokens are masked with label=-100.", flush=True)
+        trainer = build_response_only_trainer(model, tokenizer, train_dataset, training_args, lora_config)
     if args.fp16 and not args.bf16:
         converted = cast_trainable_parameters_to_fp32(trainer.model)
         if converted:
