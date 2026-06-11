@@ -17,6 +17,8 @@ configs/
   train_lora_qwen3_1p7b.yaml
   train_qlora_qwen3_1p7b.yaml
   train_grpo_qwen3_1p7b.yaml
+notebooks/
+  unsloth_sft_grpo_qwen3.ipynb
 data/
   toy_sft.jsonl
   sft_prompt_groundtruth.json
@@ -28,6 +30,7 @@ scripts/
   infer_transformers.py
   infer_lora.py
   batch_infer_transformers.py
+  batch_infer_lora.py
   batch_api_infer.py
   train_lora.py
   train_qlora.py
@@ -42,6 +45,14 @@ README.md
 ```
 
 > `scripts/train_lora.py` 是主 SFT 入口；`scripts/train_qlora.py` 作为兼容入口，默认打开 `--load_in_4bit` 并调用同一套 Unsloth SFT 逻辑。
+
+如果你想像官方 Colab 参考代码那样在 notebook 里逐 cell 跑，直接打开：
+
+```bash
+jupyter notebook notebooks/unsloth_sft_grpo_qwen3.ipynb
+```
+
+这个 notebook 里保留了 Unsloth 原生写法：`FastLanguageModel.from_pretrained(...)`、`FastLanguageModel.get_peft_model(...)`、TRL `Trainer/GRPOTrainer`、保存 adapter、单条推理与批量推理示例。
 
 ## 创建环境与安装依赖
 
@@ -142,7 +153,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/train_grpo.py \
 
 ## Unsloth LoRA 推理
 
-训练后直接加载 adapter 目录：
+训练后直接加载 adapter 目录做单条推理：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python scripts/infer_lora.py \
@@ -160,6 +171,37 @@ CUDA_VISIBLE_DEVICES=0 python scripts/infer_lora.py \
   --prompt "请给出一个简短回答。"
 ```
 
+### Unsloth 批量推理
+
+batch infer 没有删：原来的 `scripts/batch_infer_transformers.py` 还在；这次另外补了 Unsloth/LoRA adapter 版本 `scripts/batch_infer_lora.py`，用于直接加载 Unsloth 训练保存的 adapter 目录。输入支持 JSON array 和 JSONL，字段可以是 `prompt` 或 `messages`。
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
+  --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
+  --input_file data/prompts.json \
+  --output_file outputs/qwen3_1p7b_unsloth_batch_outputs.json \
+  --batch_size 4 \
+  --max_new_tokens 64 \
+  --output_field output \
+  --overwrite
+```
+
+如果每条 prompt 需要重复生成多次，用 `--num_repeats`：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/batch_infer_lora.py \
+  --model_name_or_path outputs/qwen3_1p7b_unsloth_lora \
+  --input_file data/prompts.json \
+  --output_file outputs/qwen3_1p7b_unsloth_batch_outputs_repeat5.json \
+  --batch_size 4 \
+  --max_new_tokens 64 \
+  --num_repeats 5 \
+  --output_field output \
+  --overwrite
+```
+
+当 `--num_repeats > 1` 时，输出字段会保存为 list；如果 `--num_repeats 1` 但也想保存 list，可以加 `--always_list_output`。
+
 ## 保留的 Transformers 脚本
 
 `infer_transformers.py`、`batch_infer_transformers.py`、`download_model.py`、`batch_api_infer.py` 仍保留，方便下载模型、批量推理或调用 API。但训练主线已经迁移到 Unsloth：
@@ -167,6 +209,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/infer_lora.py \
 - SFT：`scripts/train_lora.py` / `scripts/train_qlora.py`
 - RL：`scripts/train_grpo.py`
 - LoRA 推理：`scripts/infer_lora.py`
+- 批量推理：`scripts/batch_infer_lora.py`（Unsloth/adapter）或 `scripts/batch_infer_transformers.py`（Transformers/base model）
 
 ## 常见问题
 
