@@ -11,40 +11,38 @@
 
 ## 项目结构
 
+当前 git 仓库中的代码与配置文件结构如下（`models/`、`data/`、`outputs/` 等本地大文件/运行产物目录不提交到 git）：
+
 ```text
-model/
-  Qwen3-1.7B/  # 本地模型目录，不提交到 git
-configs/
-  infer_qwen3_1p7b.yaml
-  train_lora_qwen3_1p7b.yaml
-  train_qlora_qwen3_1p7b.yaml
-  train_grpo_qwen3_1p7b.yaml
-notebooks/
-  unsloth_sft_grpo_qwen3.ipynb
-data/
-  toy_sft.jsonl
-  train.json
-  test.json
-  prompts.jsonl
-  prompts.json
-scripts/
-  check_cuda.py
-  download_model.py
-  infer_transformers.py
-  infer_lora.py
-  batch_infer_transformers.py
-  batch_infer_lora.py
-  batch_api_infer.py
-  train_lora.py
-  train_qlora.py
-  train_grpo.py
-src/llm_lab/
-  data.py
-  model_utils.py
-  train_utils.py
-  unsloth_utils.py
-requirements.txt
-README.md
+.
+├── README.md
+├── requirements.txt
+├── configs/
+│   ├── infer_qwen3_1p7b.yaml
+│   ├── train_grpo_qwen3_1p7b.yaml
+│   ├── train_lora_qwen3_1p7b.yaml
+│   └── train_qlora_qwen3_1p7b.yaml
+├── notebooks/
+│   └── unsloth_sft_grpo_qwen3_v2.ipynb
+├── scripts/
+│   ├── batch_api_infer.py
+│   ├── batch_infer_lora.py
+│   ├── batch_infer_transformers.py
+│   ├── check_cuda.py
+│   ├── download_model.py
+│   ├── infer_lora.py
+│   ├── infer_transformers.py
+│   ├── register_jupyter_kernel.py
+│   ├── train_grpo.py
+│   ├── train_lora.py
+│   └── train_qlora.py
+└── src/llm_lab/
+    ├── __init__.py
+    ├── data.py
+    ├── elm_eval.py
+    ├── model_utils.py
+    ├── train_utils.py
+    └── unsloth_utils.py
 ```
 
 > `scripts/train_lora.py` 是主 SFT 入口；`scripts/train_qlora.py` 作为兼容入口，默认打开 `--load_in_4bit` 并调用同一套 Unsloth SFT 逻辑。
