@@ -1,5 +1,0 @@
-{"messages":[{"role":"user","content":"请用一句话解释什么是大语言模型。"},{"role":"assistant","content":"大语言模型是一类通过海量文本训练、能够理解并生成自然语言的神经网络模型。"}]}
-{"messages":[{"role":"user","content":"给我三个提高实验复现性的建议。"},{"role":"assistant","content":"固定随机种子，记录依赖版本和硬件环境，并保存完整的配置文件与训练日志。"}]}
-{"messages":[{"role":"user","content":"LoRA 微调的核心思想是什么？"},{"role":"assistant","content":"LoRA 通过在部分线性层旁边训练低秩增量矩阵，减少需要更新的参数量和显存占用。"}]}
-{"messages":[{"role":"user","content":"请把“模型需要更多数据”改写得更正式。"},{"role":"assistant","content":"该模型仍需要引入更大规模且更高质量的数据以进一步提升性能。"}]}
-{"text":"用户：请列出训练大模型前需要检查的两件事。\n助手：需要检查 GPU 是否可见以及训练数据格式是否符合脚本要求。"}
