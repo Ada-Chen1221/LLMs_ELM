@@ -21,7 +21,8 @@
 │   ├── infer_qwen3_1p7b.yaml
 │   ├── train_grpo_qwen3_1p7b.yaml
 │   ├── train_lora_qwen3_1p7b.yaml
-│   └── train_qlora_qwen3_1p7b.yaml
+│   ├── train_qlora_qwen3_1p7b.yaml
+│   └── train_reinforce_qwen3_4b.yaml
 ├── notebooks/
 │   └── unsloth_sft_grpo_qwen3_v2.ipynb
 ├── scripts/
@@ -35,12 +36,14 @@
 │   ├── register_jupyter_kernel.py
 │   ├── train_grpo.py
 │   ├── train_lora.py
-│   └── train_qlora.py
+│   ├── train_qlora.py
+│   └── train_reinforce_rl.py
 └── src/llm_lab/
     ├── __init__.py
     ├── data.py
     ├── elm_eval.py
     ├── model_utils.py
+    ├── rl_reinforce.py
     ├── train_utils.py
     └── unsloth_utils.py
 ```
@@ -112,6 +115,22 @@ SFT 支持三种输入：
 默认会做 **response-only loss**：`prompt` / user messages 只作为上下文，label 会被 mask 为 `-100`，loss 只算 assistant answer。若需要对 prompt 也计算 loss，训练时加 `--loss_on_prompt`。
 
 GRPO / RL 使用同一份 `prompt + groundtruth` 或 `messages` 数据。脚本会生成 TRL `GRPOTrainer` 需要的 `prompt` 列，并把答案放到 `answer` 列供 reward function 使用。
+
+
+## Post-SFT 自定义 REINFORCE RL
+
+SFT 流程不需要改动。SFT 结束后可以单独运行自定义 claim-group REINFORCE：
+
+```bash
+python scripts/train_reinforce_rl.py \
+  --model_name_or_path models/Qwen3-4B \
+  --train_file data/processed_data/processed_train_messages.json \
+  --output_dir outputs/qwen3_4b_elm_reinforce
+```
+
+`--model_name_or_path` 也可以指向 SFT 后 merge LoRA 得到的模型目录。RL 单位是完整 claim group：脚本会按 `prompt_id`/`claim_id` 分组，只保留同时包含 HHs、HHw、HLs、HLw、LHs、LHw、LLs、LLw 8 个条件的 group。生成时会删除最后一轮 assistant gold answer，只保留 system/user 并加 assistant generation prompt；completion 仍是完整 assistant response，reward 只从 `My attitude score toward this proposal is: X` 中解析 1–11 分数。
+
+每条 prompt 最多重生成 3 次，8 个条件全部解析成功后才计算 ELM reward；否则该 rollout 使用解析失败 group reward。训练日志持续写入 `outputs/.../rl_training_history.json`，每个 epoch 保存 `checkpoint-epoch-{epoch}`，训练结束保存 `final_checkpoint`。
 
 ## Unsloth SFT 训练
 
