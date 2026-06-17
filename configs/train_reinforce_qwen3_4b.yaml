@@ -27,3 +27,5 @@ lora_dropout: 0.0
 lora_target_modules: q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj
 print_rollout_details: true
 max_completion_print_chars: 500
+print_prompt_details: true
+max_prompt_print_chars: 2000

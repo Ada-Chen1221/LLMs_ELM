@@ -60,6 +60,8 @@ class RLConfig:
     lora_target_modules: str = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
     print_rollout_details: bool = True
     max_completion_print_chars: int = 500
+    print_prompt_details: bool = True
+    max_prompt_print_chars: int = 2000
 
 
 def condition_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -302,6 +304,10 @@ def print_group_rollout_details(
             "retry_fail_count": rollout.get("retry_fail_count"),
             "scores": rollout.get("scores", {}),
             "reward_details": rollout.get("reward_details", {}),
+            "prompts": {
+                label: _truncate_text(text, cfg.max_prompt_print_chars)
+                for label, text in sorted(rollout.get("prompts", {}).items())
+            } if cfg.print_prompt_details else "disabled",
             "completions": {
                 label: _truncate_text(text, cfg.max_completion_print_chars)
                 for label, text in sorted(rollout.get("completions", {}).items())
