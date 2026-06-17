@@ -51,6 +51,7 @@ class RLConfig:
     load_in_4bit: bool = False
     use_gradient_checkpointing: bool = True
     save_every_epoch: bool = True
+    verbose: bool = True
 
 
 def condition_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -196,7 +197,17 @@ def completion_logprob(model: Any, tokenizer: Any, prompt: str, completion_ids: 
     return comp_logp.mean() if cfg.logprob_reduction == "mean" else comp_logp.sum()
 
 
-def run_rollout(model: Any, tokenizer: Any, group: dict[str, Any], cfg: RLConfig, device: Any) -> dict[str, Any]:
+def run_rollout(
+    model: Any,
+    tokenizer: Any,
+    group: dict[str, Any],
+    cfg: RLConfig,
+    device: Any,
+    *,
+    epoch: int | None = None,
+    group_index: int | None = None,
+    rollout_index: int | None = None,
+) -> dict[str, Any]:
     import torch
 
     completions, scores, completion_ids_by_label = {}, {}, {}
@@ -204,12 +215,15 @@ def run_rollout(model: Any, tokenizer: Any, group: dict[str, Any], cfg: RLConfig
     prompts = {}
     model.eval()
     with torch.no_grad():
-        for row in group["items"]:
+        for condition_index, row in enumerate(group["items"], start=1):
             label = CONDITION_LABELS[condition_key(row)]
             prompt = render_generation_prompt(tokenizer, row)
             prompts[label] = prompt
             parsed = None
             for attempt in range(1, cfg.max_regen_attempts + 1):
+                if cfg.verbose:
+                    prefix = f"epoch={epoch} group={group_index} rollout={rollout_index}"
+                    print(f"{prefix} condition={condition_index}/8 label={label} generation_attempt={attempt}/{cfg.max_regen_attempts}", flush=True)
                 text, completion_ids = generate_one(model, tokenizer, prompt, cfg, device)
                 parsed = parse_likert_score(text)
                 if parsed is not None:
@@ -249,10 +263,15 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
     import torch
 
     device = next(model.parameters()).device
+    if cfg.verbose:
+        print(f"Starting REINFORCE training: epochs={cfg.num_train_epochs}, groups={len(groups)}, groups_per_step={cfg.groups_per_step}, rollouts_per_group={cfg.rollouts_per_group}", flush=True)
+        print(f"Policy device inferred from first parameter: {device}", flush=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate)
     history: list[dict[str, Any]] = []
     opt_step = 0
     for epoch in range(1, cfg.num_train_epochs + 1):
+        if cfg.verbose:
+            print(f"===== RL epoch {epoch}/{cfg.num_train_epochs} =====", flush=True)
         random.shuffle(groups)
         for batch_start in range(0, len(groups), cfg.groups_per_step):
             group_batch = groups[batch_start:batch_start + cfg.groups_per_step]
@@ -260,7 +279,21 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
             batch_records = []
             for offset, group in enumerate(group_batch, start=1):
                 group_index = batch_start + offset
-                rollouts = [run_rollout(model, tokenizer, group, cfg, device) for _ in range(cfg.rollouts_per_group)]
+                if cfg.verbose:
+                    print(f"epoch={epoch} group={group_index}/{len(groups)} claim={group['claim_id']} starting {cfg.rollouts_per_group} rollout(s)", flush=True)
+                rollouts = [
+                    run_rollout(
+                        model,
+                        tokenizer,
+                        group,
+                        cfg,
+                        device,
+                        epoch=epoch,
+                        group_index=group_index,
+                        rollout_index=rollout_index,
+                    )
+                    for rollout_index in range(1, cfg.rollouts_per_group + 1)
+                ]
                 rewards = [float(r["reward"]) for r in rollouts]
                 baseline = mean(rewards)
                 std = pstdev(rewards) if len(rewards) > 1 else 0.0
@@ -298,6 +331,8 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
             optimizer.step(); optimizer.zero_grad(set_to_none=True); opt_step += 1
         if cfg.save_every_epoch:
             ckpt = Path(cfg.output_dir) / f"checkpoint-epoch-{epoch}"
+            if cfg.verbose:
+                print(f"Saving epoch checkpoint to {ckpt}", flush=True)
             model.save_pretrained(ckpt); tokenizer.save_pretrained(ckpt)
     return history
 

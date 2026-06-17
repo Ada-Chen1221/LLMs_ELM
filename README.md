@@ -132,6 +132,8 @@ python scripts/train_reinforce_rl.py \
 
 每条 prompt 最多重生成 3 次，8 个条件全部解析成功后才计算 ELM reward；否则该 rollout 使用解析失败 group reward。训练日志持续写入 `outputs/.../rl_training_history.json`，每个 epoch 保存 `checkpoint-epoch-{epoch}`，训练结束保存 `final_checkpoint`。
 
+如果 notebook 中 RL cell 长时间没有输出，通常是在 `AutoModelForCausalLM.from_pretrained(...)` 加载 4B 模型或分配显存；当前 notebook 已在 tokenizer/model/group loading、每个 epoch、每个 group/rollout/condition generation attempt 前加入 `flush=True` 进度输出，便于区分“正在加载/生成”和“卡住”。
+
 ## Unsloth SFT 训练
 
 默认 4-bit LoRA SFT：
