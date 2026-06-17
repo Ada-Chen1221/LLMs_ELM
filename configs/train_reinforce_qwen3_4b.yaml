@@ -19,4 +19,3 @@ dtype: auto
 load_in_4bit: false
 use_gradient_checkpointing: true
 save_every_epoch: true
-verbose: true
