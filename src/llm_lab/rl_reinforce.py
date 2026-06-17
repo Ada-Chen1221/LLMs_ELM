@@ -52,6 +52,11 @@ class RLConfig:
     use_gradient_checkpointing: bool = True
     save_every_epoch: bool = True
     verbose: bool = True
+    use_lora: bool = True
+    lora_r: int = 16
+    lora_alpha: int = 16
+    lora_dropout: float = 0.0
+    lora_target_modules: str = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
 
 
 def condition_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -266,7 +271,14 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
     if cfg.verbose:
         print(f"Starting REINFORCE training: epochs={cfg.num_train_epochs}, groups={len(groups)}, groups_per_step={cfg.groups_per_step}, rollouts_per_group={cfg.rollouts_per_group}", flush=True)
         print(f"Policy device inferred from first parameter: {device}", flush=True)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate)
+    trainable_params = [param for param in model.parameters() if param.requires_grad]
+    if not trainable_params:
+        raise ValueError("No trainable parameters found for RL. Enable LoRA or unfreeze parameters before calling reinforce_train.")
+    if cfg.verbose:
+        trainable = sum(param.numel() for param in trainable_params)
+        total = sum(param.numel() for param in model.parameters())
+        print(f"Trainable parameters: {trainable:,} / {total:,} ({100 * trainable / max(total, 1):.4f}%)", flush=True)
+    optimizer = torch.optim.AdamW(trainable_params, lr=cfg.learning_rate)
     history: list[dict[str, Any]] = []
     opt_step = 0
     for epoch in range(1, cfg.num_train_epochs + 1):
@@ -297,7 +309,7 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
                 rewards = [float(r["reward"]) for r in rollouts]
                 baseline = mean(rewards)
                 std = pstdev(rewards) if len(rewards) > 1 else 0.0
-                losses = []
+                loss_values: list[float] = []
                 model.train()
                 for rollout, reward in zip(rollouts, rewards):
                     adv = reward - baseline
@@ -306,25 +318,32 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
                     if rollout["parse_failed"]:
                         rollout["advantage"] = adv
                         continue
-                    logps = [completion_logprob(model, tokenizer, rollout["prompts"][label], ids, cfg, device)
-                            for label, ids in rollout["completion_ids"].items()]
-                    rollout_logp = torch.stack(logps).mean()
-                    losses.append(-float(adv) * rollout_logp)
+                    logprob_values: list[float] = []
+                    loss_total = 0.0
+                    num_conditions = max(len(rollout["completion_ids"]), 1)
+                    for label, ids in rollout["completion_ids"].items():
+                        condition_logp = completion_logprob(model, tokenizer, rollout["prompts"][label], ids, cfg, device)
+                        condition_loss = -float(adv) * condition_logp / num_conditions
+                        (condition_loss / cfg.gradient_accumulation_steps).backward()
+                        logprob_values.append(float(condition_logp.detach().cpu()))
+                        loss_total += float(condition_loss.detach().cpu())
+                        del condition_logp, condition_loss
+                    loss_values.append(loss_total)
                     rollout["advantage"] = adv
-                    rollout["completion_logprob"] = float(rollout_logp.detach().cpu())
-                group_loss = torch.stack(losses).mean() if losses else torch.tensor(0.0, device=device, requires_grad=True)
-                batch_losses.append(group_loss)
+                    rollout["completion_logprob"] = mean(logprob_values) if logprob_values else 0.0
+                    rollout["loss"] = loss_total
+                group_loss_value = mean(loss_values) if loss_values else 0.0
+                batch_losses.append(group_loss_value)
                 batch_records.append({"epoch": epoch, "group_index": group_index, "claim_id": group["claim_id"], "rewards": rewards,
-                                      "mean_reward": baseline, "loss": float(group_loss.detach().cpu()), "rollouts": _json_safe_rollouts(rollouts)})
-            loss = torch.stack(batch_losses).mean()
-            (loss / cfg.gradient_accumulation_steps).backward()
+                                      "mean_reward": baseline, "loss": group_loss_value, "rollouts": _json_safe_rollouts(rollouts)})
+            loss_value = mean(batch_losses) if batch_losses else 0.0
             batch_number = math.ceil((batch_start + len(group_batch)) / max(cfg.groups_per_step, 1))
             if batch_number % cfg.gradient_accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
                 optimizer.step(); optimizer.zero_grad(set_to_none=True); opt_step += 1
             history.extend(batch_records)
             save_json(history, Path(cfg.output_dir) / "rl_training_history.json")
-            print(f"epoch={epoch} groups={batch_start + 1}-{batch_start + len(group_batch)}/{len(groups)} reward={mean([r['mean_reward'] for r in batch_records]):.3f} loss={float(loss.detach().cpu()):.4f}", flush=True)
+            print(f"epoch={epoch} groups={batch_start + 1}-{batch_start + len(group_batch)}/{len(groups)} reward={mean([r['mean_reward'] for r in batch_records]):.3f} loss={loss_value:.4f}", flush=True)
         # Flush gradients for a final partial accumulation window at epoch end.
         if any(param.grad is not None for param in model.parameters()):
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
@@ -354,3 +373,38 @@ def load_groups_from_file(path: str | Path) -> list[dict[str, Any]]:
 
 def save_config(cfg: RLConfig) -> None:
     save_json(asdict(cfg), Path(cfg.output_dir) / "rl_config.json")
+
+
+def apply_rl_lora(model: Any, cfg: RLConfig) -> Any:
+    """Attach a small trainable LoRA adapter for memory-efficient RL updates."""
+    if not cfg.use_lora:
+        return model
+    try:
+        from peft import LoraConfig, TaskType, get_peft_model
+    except ImportError as exc:
+        raise ImportError("RL LoRA training requires peft. Install with: pip install peft") from exc
+
+    target_modules = [item.strip() for item in cfg.lora_target_modules.split(",") if item.strip()]
+    peft_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=cfg.lora_r,
+        lora_alpha=cfg.lora_alpha,
+        lora_dropout=cfg.lora_dropout,
+        target_modules=target_modules,
+        bias="none",
+    )
+    model = get_peft_model(model, peft_config)
+    if cfg.verbose and hasattr(model, "print_trainable_parameters"):
+        model.print_trainable_parameters()
+    return model
+
+
+def maybe_prepare_kbit_training(model: Any, cfg: RLConfig) -> Any:
+    """Prepare quantized policy models before attaching LoRA adapters."""
+    if not cfg.load_in_4bit:
+        return model
+    try:
+        from peft import prepare_model_for_kbit_training
+    except ImportError as exc:
+        raise ImportError("4-bit RL LoRA training requires peft. Install with: pip install peft") from exc
+    return prepare_model_for_kbit_training(model)

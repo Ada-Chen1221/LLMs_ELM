@@ -134,6 +134,8 @@ python scripts/train_reinforce_rl.py \
 
 如果 notebook 中 RL cell 长时间没有输出，通常是在 `AutoModelForCausalLM.from_pretrained(...)` 加载 4B 模型或分配显存；当前 notebook 已在 tokenizer/model/group loading、每个 epoch、每个 group/rollout/condition generation attempt 前加入 `flush=True` 进度输出，便于区分“正在加载/生成”和“卡住”。
 
+注意：不要在 24GB 单卡上做 Qwen3-4B full-parameter REINFORCE。RL 需要 generation 后再对 completion 做带梯度 forward/backward，并且 AdamW optimizer state 会额外占用大量显存；这比 SFT LoRA/QLoRA 更容易 OOM。默认 RL 配置现在会在 policy model 上再挂一个新的 LoRA adapter，只训练 adapter 参数；如果仍然 OOM，再把 `load_in_4bit` 改成 `true`，并保持 `use_lora: true`。
+
 ## Unsloth SFT 训练
 
 默认 4-bit LoRA SFT：
