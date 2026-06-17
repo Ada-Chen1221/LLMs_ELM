@@ -1,0 +1,27 @@
+model_name_or_path: models/Qwen3-4B  # or outputs/.../merged_sft_model
+train_file: data/processed_data/processed_train_messages.json
+output_dir: outputs/qwen3_4b_elm_reinforce
+num_train_epochs: 1
+groups_per_step: 1
+rollouts_per_group: 2
+learning_rate: 0.000001
+gradient_accumulation_steps: 1
+max_grad_norm: 1.0
+max_new_tokens: 32
+temperature: 0.7
+top_p: 0.9
+max_regen_attempts: 3
+retry_fail_penalty: 0.2
+parse_fail_group_reward: -8.0
+logprob_reduction: mean
+seed: 3407
+dtype: auto
+load_in_4bit: false
+use_gradient_checkpointing: true
+save_every_epoch: true
+verbose: true
+use_lora: true
+lora_r: 16
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target_modules: q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj
