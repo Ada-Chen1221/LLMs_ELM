@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from dataclasses import asdict, dataclass
@@ -57,6 +58,8 @@ class RLConfig:
     lora_alpha: int = 16
     lora_dropout: float = 0.0
     lora_target_modules: str = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
+    print_rollout_details: bool = True
+    max_completion_print_chars: int = 500
 
 
 def condition_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -264,6 +267,50 @@ def run_rollout(
     }
 
 
+def _truncate_text(text: Any, max_chars: int) -> str:
+    text = str(text)
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"... [truncated {len(text) - max_chars} chars]"
+
+
+def print_group_rollout_details(
+    *,
+    epoch: int,
+    group_index: int,
+    num_groups: int,
+    claim_id: Any,
+    rewards: list[float],
+    rollouts: list[dict[str, Any]],
+    cfg: RLConfig,
+) -> None:
+    """Print rewards, reward terms, parsed scores, and completions for debugging RL behavior."""
+    if not (cfg.verbose and cfg.print_rollout_details):
+        return
+
+    print("-" * 100, flush=True)
+    print(
+        f"RL rollout details | epoch={epoch} group={group_index}/{num_groups} "
+        f"claim={claim_id} rewards={rewards} mean_reward={mean(rewards):.4f}",
+        flush=True,
+    )
+    for rollout_idx, rollout in enumerate(rollouts, start=1):
+        printable = {
+            "rollout": rollout_idx,
+            "reward": rollout.get("reward"),
+            "parse_failed": rollout.get("parse_failed"),
+            "retry_fail_count": rollout.get("retry_fail_count"),
+            "scores": rollout.get("scores", {}),
+            "reward_details": rollout.get("reward_details", {}),
+            "completions": {
+                label: _truncate_text(text, cfg.max_completion_print_chars)
+                for label, text in sorted(rollout.get("completions", {}).items())
+            },
+        }
+        print(json.dumps(printable, ensure_ascii=False, indent=2), flush=True)
+    print("-" * 100, flush=True)
+
+
 def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cfg: RLConfig) -> list[dict[str, Any]]:
     import torch
 
@@ -307,6 +354,15 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
                     for rollout_index in range(1, cfg.rollouts_per_group + 1)
                 ]
                 rewards = [float(r["reward"]) for r in rollouts]
+                print_group_rollout_details(
+                    epoch=epoch,
+                    group_index=group_index,
+                    num_groups=len(groups),
+                    claim_id=group["claim_id"],
+                    rewards=rewards,
+                    rollouts=rollouts,
+                    cfg=cfg,
+                )
                 baseline = mean(rewards)
                 std = pstdev(rewards) if len(rewards) > 1 else 0.0
                 loss_values: list[float] = []
