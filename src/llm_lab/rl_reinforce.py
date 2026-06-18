@@ -5,14 +5,21 @@ from __future__ import annotations
 import json
 import math
 import random
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean
 from typing import Any
 
 
 from llm_lab.data import _apply_chat_template, _read_json_or_jsonl
-from llm_lab.elm_eval import REQUIRED_CONDITION_KEYS, parse_likert_score, save_json
+from llm_lab.elm_eval import (
+    REQUIRED_CONDITION_KEYS,
+    batch_generate_predictions,
+    compute_elm_stats,
+    parse_likert_score,
+    save_json,
+)
 
 MAX_REGEN_ATTEMPTS = 3
 RETRY_FAIL_PENALTY = 0.2
@@ -41,12 +48,13 @@ class RLConfig:
     gradient_accumulation_steps: int = 1
     max_grad_norm: float = 1.0
     max_new_tokens: int = 32
-    temperature: float = 0.7
-    top_p: float = 0.9
+    temperature: float = 1.0
+    top_p: float = 0.95
     max_regen_attempts: int = MAX_REGEN_ATTEMPTS
     retry_fail_penalty: float = RETRY_FAIL_PENALTY
     parse_fail_group_reward: float = PARSE_FAIL_GROUP_REWARD
-    logprob_reduction: str = "mean"
+    logprob_reduction: str = "sum"
+    global_reward_baseline: float = 0.0
     seed: int = 3407
     dtype: str = "auto"
     load_in_4bit: bool = False
@@ -62,6 +70,14 @@ class RLConfig:
     max_completion_print_chars: int = 500
     print_prompt_details: bool = True
     max_prompt_print_chars: int = 2000
+    valid_file: str | None = None
+    rl_valid_eval_dir: str | None = None
+    best_rl_checkpoint_dir: str | None = None
+    valid_eval_batch_size: int = 8
+    valid_eval_max_new_tokens: int = 32
+    valid_eval_temperature: float = 0.0
+    valid_eval_top_p: float = 1.0
+    valid_delta_arg_drop_tolerance: float = 0.03
 
 
 def condition_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -102,28 +118,31 @@ def render_generation_prompt(tokenizer: Any, row: dict[str, Any]) -> str:
 
 
 def reward_from_diff_low_arg(diff: int) -> float:
+    """低涉入论据效应：strong - weak；{-1, 0, 1} 都视为符合低加工，其中 0 最好。"""
     if diff == 0:
-        return 2.0
+        return 5.0
     if diff == 1:
-        return 1.5
+        return 2.0
     if diff == -1:
         return 1.0
     if diff in {2, -2}:
-        return -1.0
-    return -2.0
+        return -2.0
+    return -3.0
 
 
 def reward_from_diff_low_src(diff: int) -> float:
+    """低涉入来源效应：highExpert - lowExpert；source cue 是辅助项。"""
     if diff >= 2:
-        return 2.0
+        return 0.75
     if diff == 1:
-        return 1.0
+        return 0.5
     if diff == 0:
-        return -1.0
-    return -2.0
+        return -0.5
+    return -1.0
 
 
 def penalty_high_arg(diff: int) -> float:
+    """高涉入论据效应：strong - weak；只扣不奖。"""
     if diff >= 1:
         return 0.0
     if diff == 0:
@@ -132,6 +151,7 @@ def penalty_high_arg(diff: int) -> float:
 
 
 def penalty_high_src(diff: int) -> float:
+    """高涉入来源效应：highExpert - lowExpert；只扣不奖。"""
     if 0 <= diff <= 1:
         return 0.0
     if diff == 2:
@@ -143,24 +163,26 @@ def penalty_high_src(diff: int) -> float:
 
 def compute_group_reward(scores: dict[str, int]) -> tuple[float, dict[str, Any]]:
     diffs = {
-        "low_arg_high_source": scores["LHs"] - scores["LHw"],
-        "low_arg_low_source": scores["LLs"] - scores["LLw"],
-        "low_src_strong_arg": scores["LHs"] - scores["LLs"],
-        "low_src_weak_arg": scores["LHw"] - scores["LLw"],
-        "high_arg_high_source": scores["HHs"] - scores["HHw"],
-        "high_arg_low_source": scores["HLs"] - scores["HLw"],
-        "high_src_strong_arg": scores["HHs"] - scores["HLs"],
-        "high_src_weak_arg": scores["HHw"] - scores["HLw"],
+        # Argument-quality effects: strong - weak
+        "arg_effect_lowinv_highsrc": scores["LHs"] - scores["LHw"],
+        "arg_effect_lowinv_lowsrc": scores["LLs"] - scores["LLw"],
+        "arg_effect_highinv_highsrc": scores["HHs"] - scores["HHw"],
+        "arg_effect_highinv_lowsrc": scores["HLs"] - scores["HLw"],
+        # Source-expertise effects: highExpert - lowExpert
+        "src_effect_lowinv_strongarg": scores["LHs"] - scores["LLs"],
+        "src_effect_lowinv_weakarg": scores["LHw"] - scores["LLw"],
+        "src_effect_highinv_strongarg": scores["HHs"] - scores["HLs"],
+        "src_effect_highinv_weakarg": scores["HHw"] - scores["HLw"],
     }
     terms = {
-        "low_arg_high_source": reward_from_diff_low_arg(diffs["low_arg_high_source"]),
-        "low_arg_low_source": reward_from_diff_low_arg(diffs["low_arg_low_source"]),
-        "low_src_strong_arg": reward_from_diff_low_src(diffs["low_src_strong_arg"]),
-        "low_src_weak_arg": reward_from_diff_low_src(diffs["low_src_weak_arg"]),
-        "high_arg_high_source": penalty_high_arg(diffs["high_arg_high_source"]),
-        "high_arg_low_source": penalty_high_arg(diffs["high_arg_low_source"]),
-        "high_src_strong_arg": penalty_high_src(diffs["high_src_strong_arg"]),
-        "high_src_weak_arg": penalty_high_src(diffs["high_src_weak_arg"]),
+        "arg_effect_lowinv_highsrc": reward_from_diff_low_arg(diffs["arg_effect_lowinv_highsrc"]),
+        "arg_effect_lowinv_lowsrc": reward_from_diff_low_arg(diffs["arg_effect_lowinv_lowsrc"]),
+        "src_effect_lowinv_strongarg": reward_from_diff_low_src(diffs["src_effect_lowinv_strongarg"]),
+        "src_effect_lowinv_weakarg": reward_from_diff_low_src(diffs["src_effect_lowinv_weakarg"]),
+        "arg_effect_highinv_highsrc": penalty_high_arg(diffs["arg_effect_highinv_highsrc"]),
+        "arg_effect_highinv_lowsrc": penalty_high_arg(diffs["arg_effect_highinv_lowsrc"]),
+        "src_effect_highinv_strongarg": penalty_high_src(diffs["src_effect_highinv_strongarg"]),
+        "src_effect_highinv_weakarg": penalty_high_src(diffs["src_effect_highinv_weakarg"]),
     }
     return sum(terms.values()), {"diffs": diffs, "terms": terms}
 
@@ -333,6 +355,11 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
         print(f"Trainable parameters: {trainable:,} / {total:,} ({100 * trainable / max(total, 1):.4f}%)", flush=True)
     optimizer = torch.optim.AdamW(trainable_params, lr=cfg.learning_rate)
     history: list[dict[str, Any]] = []
+    valid_rows = _read_json_or_jsonl(cfg.valid_file) if cfg.valid_file else []
+    valid_eval_history: list[dict[str, Any]] = []
+    previous_valid_summary: dict[str, Any] | None = None
+    if cfg.verbose and valid_rows:
+        print(f"Loaded {len(valid_rows)} validation rows for RL epoch-end ELM evaluation.", flush=True)
     opt_step = 0
     for epoch in range(1, cfg.num_train_epochs + 1):
         if cfg.verbose:
@@ -369,14 +396,11 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
                     rollouts=rollouts,
                     cfg=cfg,
                 )
-                baseline = mean(rewards)
-                std = pstdev(rewards) if len(rewards) > 1 else 0.0
+                baseline = cfg.global_reward_baseline
                 loss_values: list[float] = []
                 model.train()
                 for rollout, reward in zip(rollouts, rewards):
                     adv = reward - baseline
-                    if cfg.rollouts_per_group > 1 and std > 1e-8:
-                        adv /= std
                     if rollout["parse_failed"]:
                         rollout["advantage"] = adv
                         continue
@@ -397,7 +421,7 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
                 group_loss_value = mean(loss_values) if loss_values else 0.0
                 batch_losses.append(group_loss_value)
                 batch_records.append({"epoch": epoch, "group_index": group_index, "claim_id": group["claim_id"], "rewards": rewards,
-                                      "mean_reward": baseline, "loss": group_loss_value, "rollouts": _json_safe_rollouts(rollouts)})
+                                      "mean_reward": mean(rewards), "reward_baseline": baseline, "loss": group_loss_value, "rollouts": _json_safe_rollouts(rollouts)})
             loss_value = mean(batch_losses) if batch_losses else 0.0
             batch_number = math.ceil((batch_start + len(group_batch)) / max(cfg.groups_per_step, 1))
             if batch_number % cfg.gradient_accumulation_steps == 0:
@@ -410,6 +434,17 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
         if any(param.grad is not None for param in model.parameters()):
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
             optimizer.step(); optimizer.zero_grad(set_to_none=True); opt_step += 1
+        if valid_rows:
+            previous_valid_summary = evaluate_rl_validation(
+                model=model,
+                tokenizer=tokenizer,
+                valid_rows=valid_rows,
+                cfg=cfg,
+                epoch=epoch,
+                device=device,
+                previous_valid_summary=previous_valid_summary,
+                history=valid_eval_history,
+            )
         if cfg.save_every_epoch:
             ckpt = Path(cfg.output_dir) / f"checkpoint-epoch-{epoch}"
             if cfg.verbose:
@@ -435,6 +470,104 @@ def load_groups_from_file(path: str | Path) -> list[dict[str, Any]]:
 
 def save_config(cfg: RLConfig) -> None:
     save_json(asdict(cfg), Path(cfg.output_dir) / "rl_config.json")
+
+
+def rl_valid_improved(
+    current: dict[str, Any] | None,
+    previous: dict[str, Any] | None,
+    *,
+    delta_arg_drop_tolerance: float,
+) -> bool:
+    """Return True when validation Delta_Arg/Delta_Src satisfy the RL best-save rule."""
+    if current is None:
+        return False
+    if previous is None:
+        return True
+    cur_arg, cur_src = current["Delta_Arg"], current["Delta_Src"]
+    prev_arg, prev_src = previous["Delta_Arg"], previous["Delta_Src"]
+    if cur_arg > prev_arg and cur_src >= prev_src:
+        return True
+    if cur_src > prev_src and cur_arg >= prev_arg - delta_arg_drop_tolerance:
+        return True
+    return False
+
+
+def save_rl_best_checkpoint(model: Any, tokenizer: Any, output_dir: str | Path) -> None:
+    output_dir = Path(output_dir)
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(str(output_dir))
+    tokenizer.save_pretrained(str(output_dir))
+
+
+def evaluate_rl_validation(
+    *,
+    model: Any,
+    tokenizer: Any,
+    valid_rows: list[dict[str, Any]],
+    cfg: RLConfig,
+    epoch: int,
+    device: Any,
+    previous_valid_summary: dict[str, Any] | None,
+    history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Run validation inference, save predictions/stats/history, and optionally save best LoRA."""
+    eval_dir = Path(cfg.rl_valid_eval_dir or Path(cfg.output_dir) / "rl_valid_eval_by_epoch")
+    best_dir = Path(cfg.best_rl_checkpoint_dir or Path(cfg.output_dir) / "best_rl_checkpoint")
+    eval_dir.mkdir(parents=True, exist_ok=True)
+
+    keep_fields = ["prompt_id", "claim_id", "groundtruth", "condition", "messages"]
+    predictions = batch_generate_predictions(
+        model,
+        tokenizer,
+        valid_rows,
+        system_prompt="",
+        keep_fields=keep_fields,
+        max_new_tokens=cfg.valid_eval_max_new_tokens,
+        temperature=cfg.valid_eval_temperature,
+        top_p=cfg.valid_eval_top_p,
+        batch_size=cfg.valid_eval_batch_size,
+        device=device,
+        progress_prefix=f"rl epoch {epoch} valid",
+    )
+    pred_path = eval_dir / f"epoch_{epoch}_valid_predictions.json"
+    stats_path = eval_dir / f"epoch_{epoch}_valid_elm_stats.json"
+    save_json(predictions, pred_path)
+    stats = compute_elm_stats(predictions, prediction_file=pred_path)
+    save_json(stats, stats_path)
+
+    summary = stats["summary"]
+    improved = rl_valid_improved(
+        summary,
+        previous_valid_summary,
+        delta_arg_drop_tolerance=cfg.valid_delta_arg_drop_tolerance,
+    )
+    if improved:
+        save_rl_best_checkpoint(model, tokenizer, best_dir)
+
+    record = {
+        "epoch": epoch,
+        "valid_summary": summary,
+        "valid_improved": improved,
+        "saved_as_best": improved,
+        "best_checkpoint_dir": str(best_dir) if improved else None,
+        "valid_predictions_file": str(pred_path),
+        "valid_stats_file": str(stats_path),
+    }
+    history.append(record)
+    save_json(history, eval_dir / "rl_valid_eval_history.json")
+
+    print(
+        f"RL valid epoch {epoch}: "
+        f"Delta_Arg={summary['Delta_Arg']:.6f}, "
+        f"Delta_Src={summary['Delta_Src']:.6f}, "
+        f"saved_as_best={improved}",
+        flush=True,
+    )
+    if improved:
+        print(f"Saved best RL checkpoint to: {best_dir}", flush=True)
+    return summary
 
 
 def apply_rl_lora(model: Any, cfg: RLConfig) -> Any:
