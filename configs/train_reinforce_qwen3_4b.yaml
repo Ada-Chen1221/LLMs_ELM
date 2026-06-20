@@ -30,6 +30,7 @@ max_completion_print_chars: 500
 print_prompt_details: true
 max_prompt_print_chars: 2000
 global_reward_baseline: 0.0
+reward_baseline_mode: group_mean
 valid_file: data/processed_data/processed_valid_messages.json
 rl_valid_eval_dir: outputs/qwen3_4b_elm_reinforce/rl_valid_eval_by_epoch
 best_rl_checkpoint_dir: outputs/qwen3_4b_elm_reinforce/best_rl_checkpoint

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 import math
 import random
@@ -55,6 +56,7 @@ class RLConfig:
     parse_fail_group_reward: float = PARSE_FAIL_GROUP_REWARD
     logprob_reduction: str = "sum"
     global_reward_baseline: float = 0.0
+    reward_baseline_mode: str = "group_mean"
     seed: int = 3407
     dtype: str = "auto"
     load_in_4bit: bool = False
@@ -117,75 +119,192 @@ def render_generation_prompt(tokenizer: Any, row: dict[str, Any]) -> str:
     return _apply_chat_template(tokenizer, messages, add_generation_prompt=True)
 
 
-def reward_from_diff_low_arg(diff: int) -> float:
-    """低涉入论据效应：strong - weak；{-1, 0, 1} 都视为符合低加工，其中 0 最好。"""
-    if diff == 0:
-        return 5.0
-    if diff == 1:
-        return 2.0
-    if diff == -1:
-        return 1.0
-    if diff in {2, -2}:
-        return -2.0
-    return -3.0
-
-
-def reward_from_diff_low_src(diff: int) -> float:
-    """低涉入来源效应：highExpert - lowExpert；source cue 是辅助项。"""
+def penalty_high_inv_arg_effect(diff: int) -> float:
+    """高涉入下 strong argument 应明显高于 weak argument；diff = strong - weak。"""
     if diff >= 2:
-        return 0.75
+        return 0.0
     if diff == 1:
-        return 0.5
+        return -2.0
+    if diff == 0:
+        return -4.0
+    return -6.0
+
+
+def penalty_high_inv_src_effect(diff: int) -> float:
+    """高涉入下 source cue 不应该主导，但 highExpert 不能低于 lowExpert。"""
+    if diff in {0, 1}:
+        return 0.0
+    if diff == 2:
+        return -0.5
+    if diff >= 3:
+        return -1.5
+    return -1.0
+
+
+def bonus_low_inv_arg_suppression(diff: int) -> float:
+    """低涉入下 strong - weak 越接近 0 越好。"""
+    abs_diff = abs(diff)
+    if abs_diff == 0:
+        return 2.0
+    if abs_diff == 1:
+        return 1.2
+    return 0.0
+
+
+def bonus_low_inv_src_effect(diff: int) -> float:
+    """低涉入下 highExpert - lowExpert 应该为正。"""
+    if diff >= 3:
+        return 1.5
+    if diff == 2:
+        return 1.0
+    if diff == 1:
+        return 0.6
     if diff == 0:
         return -0.5
     return -1.0
 
 
-def penalty_high_arg(diff: int) -> float:
-    """高涉入论据效应：strong - weak；只扣不奖。"""
-    if diff >= 1:
-        return 0.0
-    if diff == 0:
-        return -2.0
-    return -3.0
+def detect_score_collapse(scores: dict[str, int]) -> tuple[bool, float, dict[str, Any]]:
+    values = list(scores.values())
+    score_range = max(values) - min(values)
+    counts = Counter(values)
+    unique_scores = len(counts)
+    most_common_score, max_count = counts.most_common(1)[0]
 
+    collapsed = False
+    penalty = 0.0
+    reason = None
+    if score_range <= 1:
+        collapsed = True
+        penalty = -6.0
+        reason = "score_range_le_1"
+    elif unique_scores <= 2 and max_count >= 5:
+        collapsed = True
+        penalty = -6.0
+        reason = "unique_le_2_and_majority_same"
+    elif unique_scores <= 3 and max_count >= 6:
+        collapsed = True
+        penalty = -6.0
+        reason = "unique_le_3_and_strong_majority_same"
 
-def penalty_high_src(diff: int) -> float:
-    """高涉入来源效应：highExpert - lowExpert；只扣不奖。"""
-    if 0 <= diff <= 1:
-        return 0.0
-    if diff == 2:
-        return -1.0
-    if diff >= 3:
-        return -2.0
-    return -1.0
+    return collapsed, penalty, {
+        "score_range": score_range,
+        "unique_scores": unique_scores,
+        "score_counts": dict(counts),
+        "most_common_score": most_common_score,
+        "max_count": max_count,
+        "collapse_reason": reason,
+    }
 
 
 def compute_group_reward(scores: dict[str, int]) -> tuple[float, dict[str, Any]]:
-    diffs = {
-        # Argument-quality effects: strong - weak
-        "arg_effect_lowinv_highsrc": scores["LHs"] - scores["LHw"],
-        "arg_effect_lowinv_lowsrc": scores["LLs"] - scores["LLw"],
-        "arg_effect_highinv_highsrc": scores["HHs"] - scores["HHw"],
-        "arg_effect_highinv_lowsrc": scores["HLs"] - scores["HLw"],
-        # Source-expertise effects: highExpert - lowExpert
-        "src_effect_lowinv_strongarg": scores["LHs"] - scores["LLs"],
-        "src_effect_lowinv_weakarg": scores["LHw"] - scores["LLw"],
-        "src_effect_highinv_strongarg": scores["HHs"] - scores["HLs"],
-        "src_effect_highinv_weakarg": scores["HHw"] - scores["HLw"],
-    }
-    terms = {
-        "arg_effect_lowinv_highsrc": reward_from_diff_low_arg(diffs["arg_effect_lowinv_highsrc"]),
-        "arg_effect_lowinv_lowsrc": reward_from_diff_low_arg(diffs["arg_effect_lowinv_lowsrc"]),
-        "src_effect_lowinv_strongarg": reward_from_diff_low_src(diffs["src_effect_lowinv_strongarg"]),
-        "src_effect_lowinv_weakarg": reward_from_diff_low_src(diffs["src_effect_lowinv_weakarg"]),
-        "arg_effect_highinv_highsrc": penalty_high_arg(diffs["arg_effect_highinv_highsrc"]),
-        "arg_effect_highinv_lowsrc": penalty_high_arg(diffs["arg_effect_highinv_lowsrc"]),
-        "src_effect_highinv_strongarg": penalty_high_src(diffs["src_effect_highinv_strongarg"]),
-        "src_effect_highinv_weakarg": penalty_high_src(diffs["src_effect_highinv_weakarg"]),
-    }
-    return sum(terms.values()), {"diffs": diffs, "terms": terms}
+    HHs, HHw = scores["HHs"], scores["HHw"]
+    HLs, HLw = scores["HLs"], scores["HLw"]
+    LHs, LHw = scores["LHs"], scores["LHw"]
+    LLs, LLw = scores["LLs"], scores["LLw"]
 
+    diffs = {
+        "arg_effect_high_inv_high_src": HHs - HHw,
+        "arg_effect_high_inv_low_src": HLs - HLw,
+        "src_effect_high_inv_strong_arg": HHs - HLs,
+        "src_effect_high_inv_weak_arg": HHw - HLw,
+        "arg_effect_low_inv_high_src": LHs - LHw,
+        "arg_effect_low_inv_low_src": LLs - LLw,
+        "src_effect_low_inv_strong_arg": LHs - LLs,
+        "src_effect_low_inv_weak_arg": LHw - LLw,
+    }
+
+    collapsed, collapse_penalty, collapse_details = detect_score_collapse(scores)
+    if collapsed:
+        return float(collapse_penalty), {
+            "diffs": diffs,
+            "collapse_detected": True,
+            "collapse_details": collapse_details,
+            "high_terms": {},
+            "low_arg_terms": {},
+            "low_src_terms": {},
+            "high_arg_gate_passed": False,
+            "low_arg_gate_passed": False,
+            "high_reward": 0.0,
+            "low_arg_reward": 0.0,
+            "low_src_reward": 0.0,
+            "reward": collapse_penalty,
+        }
+
+    high_terms = {
+        "arg_effect_high_inv_high_src": penalty_high_inv_arg_effect(diffs["arg_effect_high_inv_high_src"]),
+        "arg_effect_high_inv_low_src": penalty_high_inv_arg_effect(diffs["arg_effect_high_inv_low_src"]),
+        "src_effect_high_inv_strong_arg": penalty_high_inv_src_effect(diffs["src_effect_high_inv_strong_arg"]),
+        "src_effect_high_inv_weak_arg": penalty_high_inv_src_effect(diffs["src_effect_high_inv_weak_arg"]),
+    }
+    high_reward = sum(high_terms.values())
+    high_arg_gate_passed = (
+        diffs["arg_effect_high_inv_high_src"] >= 2
+        and diffs["arg_effect_high_inv_low_src"] >= 2
+    )
+    if not high_arg_gate_passed:
+        reward = min(high_reward, -1.0)
+        return float(reward), {
+            "diffs": diffs,
+            "collapse_detected": False,
+            "collapse_details": collapse_details,
+            "high_terms": high_terms,
+            "low_arg_terms": {},
+            "low_src_terms": {},
+            "high_arg_gate_passed": False,
+            "low_arg_gate_passed": False,
+            "high_reward": high_reward,
+            "low_arg_reward": 0.0,
+            "low_src_reward": 0.0,
+            "reward": reward,
+        }
+
+    low_arg_gate_passed = (
+        abs(diffs["arg_effect_low_inv_high_src"]) <= 1
+        and abs(diffs["arg_effect_low_inv_low_src"]) <= 1
+    )
+    if not low_arg_gate_passed:
+        reward = high_reward
+        return float(reward), {
+            "diffs": diffs,
+            "collapse_detected": False,
+            "collapse_details": collapse_details,
+            "high_terms": high_terms,
+            "low_arg_terms": {},
+            "low_src_terms": {},
+            "high_arg_gate_passed": True,
+            "low_arg_gate_passed": False,
+            "high_reward": high_reward,
+            "low_arg_reward": 0.0,
+            "low_src_reward": 0.0,
+            "reward": reward,
+        }
+
+    low_arg_terms = {
+        "arg_effect_low_inv_high_src": bonus_low_inv_arg_suppression(diffs["arg_effect_low_inv_high_src"]),
+        "arg_effect_low_inv_low_src": bonus_low_inv_arg_suppression(diffs["arg_effect_low_inv_low_src"]),
+    }
+    low_src_terms = {
+        "src_effect_low_inv_strong_arg": bonus_low_inv_src_effect(diffs["src_effect_low_inv_strong_arg"]),
+        "src_effect_low_inv_weak_arg": bonus_low_inv_src_effect(diffs["src_effect_low_inv_weak_arg"]),
+    }
+    low_arg_reward = sum(low_arg_terms.values())
+    low_src_reward = sum(low_src_terms.values())
+    reward = high_reward + low_arg_reward + low_src_reward
+    return float(reward), {
+        "diffs": diffs,
+        "collapse_detected": False,
+        "collapse_details": collapse_details,
+        "high_terms": high_terms,
+        "low_arg_terms": low_arg_terms,
+        "low_src_terms": low_src_terms,
+        "high_arg_gate_passed": True,
+        "low_arg_gate_passed": True,
+        "high_reward": high_reward,
+        "low_arg_reward": low_arg_reward,
+        "low_src_reward": low_src_reward,
+        "reward": reward,
+    }
 
 def _tokenize(tokenizer: Any, texts: list[str], device: Any) -> dict[str, Any]:
     import torch
@@ -213,6 +332,32 @@ def generate_one(model: Any, tokenizer: Any, prompt: str, cfg: RLConfig, device:
     completion_ids = outputs[0, inputs["input_ids"].shape[-1]:].detach()
     text = tokenizer.decode(completion_ids, skip_special_tokens=True).strip()
     return text, completion_ids.cpu()
+
+
+def generate_many(
+    model: Any,
+    tokenizer: Any,
+    prompts: list[str],
+    cfg: RLConfig,
+    device: Any,
+) -> list[tuple[str, Any]]:
+    """Generate completions for multiple prompts in one decoder-only batch."""
+    if not prompts:
+        return []
+    inputs = _tokenize(tokenizer, prompts, device)
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=cfg.max_new_tokens,
+        do_sample=True,
+        temperature=cfg.temperature,
+        top_p=cfg.top_p,
+        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+        use_cache=True,
+    )
+    prompt_len = inputs["input_ids"].shape[-1]
+    new_tokens = outputs[:, prompt_len:].detach()
+    texts = tokenizer.batch_decode(new_tokens, skip_special_tokens=True)
+    return [(text.strip(), token_ids.cpu()) for text, token_ids in zip(texts, new_tokens)]
 
 
 def completion_logprob(model: Any, tokenizer: Any, prompt: str, completion_ids: Any, cfg: RLConfig, device: Any) -> Any:
@@ -245,37 +390,54 @@ def run_rollout(
     completions, scores, completion_ids_by_label = {}, {}, {}
     retry_fail_count = 0
     prompts = {}
+    pending: dict[str, str] = {}
     model.eval()
     with torch.no_grad():
-        for condition_index, row in enumerate(group["items"], start=1):
+        for row in group["items"]:
             label = CONDITION_LABELS[condition_key(row)]
             prompt = render_generation_prompt(tokenizer, row)
             prompts[label] = prompt
-            parsed = None
-            for attempt in range(1, cfg.max_regen_attempts + 1):
-                if cfg.verbose:
-                    prefix = f"epoch={epoch} group={group_index} rollout={rollout_index}"
-                    print(f"{prefix} condition={condition_index}/8 label={label} generation_attempt={attempt}/{cfg.max_regen_attempts}", flush=True)
-                text, completion_ids = generate_one(model, tokenizer, prompt, cfg, device)
+            pending[label] = prompt
+
+        for attempt in range(1, cfg.max_regen_attempts + 1):
+            if cfg.verbose:
+                prefix = f"epoch={epoch} group={group_index} rollout={rollout_index}"
+                print(
+                    f"{prefix} batch_generation_attempt={attempt}/{cfg.max_regen_attempts} "
+                    f"pending_conditions={list(pending)}",
+                    flush=True,
+                )
+            batch_labels = list(pending)
+            batch_prompts = [pending[label] for label in batch_labels]
+            generated = generate_many(model, tokenizer, batch_prompts, cfg, device)
+            next_pending: dict[str, str] = {}
+            for label, (text, completion_ids) in zip(batch_labels, generated):
                 parsed = parse_likert_score(text)
                 if parsed is not None:
                     completions[label] = text
                     scores[label] = parsed
                     completion_ids_by_label[label] = completion_ids
-                    break
-                retry_fail_count += 1
-                if attempt == cfg.max_regen_attempts:
-                    return {
-                        "parse_failed": True,
-                        "reward": cfg.parse_fail_group_reward,
-                        "retry_fail_count": retry_fail_count,
-                        "scores": scores,
-                        "completions": {**completions, label: text},
-                        "failed_condition": label,
-                        "reward_details": {"reason": "parse failure after max regeneration attempts"},
-                        "prompts": prompts,
-                        "completion_ids": completion_ids_by_label,
-                    }
+                else:
+                    retry_fail_count += 1
+                    completions[label] = text
+                    if attempt < cfg.max_regen_attempts:
+                        next_pending[label] = pending[label]
+            pending = next_pending
+            if not pending:
+                break
+        if pending:
+            failed_labels = list(pending)
+            return {
+                "parse_failed": True,
+                "reward": cfg.parse_fail_group_reward,
+                "retry_fail_count": retry_fail_count,
+                "scores": scores,
+                "completions": completions,
+                "failed_conditions": failed_labels,
+                "reward_details": {"reason": "parse failure after max regeneration attempts"},
+                "prompts": prompts,
+                "completion_ids": completion_ids_by_label,
+            }
     elm_reward, details = compute_group_reward(scores)
     reward = elm_reward - cfg.retry_fail_penalty * retry_fail_count
     details.update({"elm_reward": elm_reward, "retry_penalty": cfg.retry_fail_penalty * retry_fail_count})
@@ -396,7 +558,16 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
                     rollouts=rollouts,
                     cfg=cfg,
                 )
-                baseline = cfg.global_reward_baseline
+                if cfg.reward_baseline_mode == "group_mean" and len(rewards) > 1:
+                    baseline = mean(rewards)
+                elif cfg.reward_baseline_mode == "global":
+                    baseline = cfg.global_reward_baseline
+                elif cfg.reward_baseline_mode == "none":
+                    baseline = 0.0
+                else:
+                    raise ValueError(
+                        "reward_baseline_mode must be one of: 'group_mean', 'global', or 'none'."
+                    )
                 loss_values: list[float] = []
                 model.train()
                 for rollout, reward in zip(rollouts, rewards):

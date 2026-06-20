@@ -130,7 +130,7 @@ python scripts/train_reinforce_rl.py \
 
 `--model_name_or_path` 也可以指向 SFT 后 merge LoRA 得到的模型目录。RL 单位是完整 claim group：脚本会按 `prompt_id`/`claim_id` 分组，只保留同时包含 HHs、HHw、HLs、HLw、LHs、LHw、LLs、LLw 8 个条件的 group。生成时会删除最后一轮 assistant gold answer，只保留 system/user 并加 assistant generation prompt；completion 仍是完整 assistant response，reward 只从 `My attitude score toward this proposal is: X` 中解析 1–11 分数。
 
-每条 prompt 最多重生成 3 次，8 个条件全部解析成功后才计算 ELM reward；否则该 rollout 使用解析失败 group reward。训练日志持续写入 `outputs/.../rl_training_history.json`，每个 epoch 保存 `checkpoint-epoch-{epoch}`，训练结束保存 `final_checkpoint`。RL 默认使用更随机的 sampling（temperature=1.0/top_p=0.95）、`logprob_reduction=sum`，并用 `global_reward_baseline=0.0` 计算 advantage。若配置 `valid_file`，每个 epoch 后会保存 valid predictions、valid ELM stats、`rl_valid_eval_history.json`，并按 valid `Delta_Arg`/`Delta_Src` 保存 `best_rl_checkpoint`。
+每条 prompt 最多重生成 3 次；同一 rollout 内 8 个 condition 会按 batch 一次性生成，解析失败的 condition 再批量重试，8 个条件全部解析成功后才计算 ELM reward；否则该 rollout 使用解析失败 group reward。训练日志持续写入 `outputs/.../rl_training_history.json`，每个 epoch 保存 `checkpoint-epoch-{epoch}`，训练结束保存 `final_checkpoint`。RL 默认使用更随机的 sampling（temperature=1.0/top_p=0.95）、`logprob_reduction=sum`，并默认使用 `reward_baseline_mode=group_mean` 按同一 claim group 的 rollout reward 计算 advantage（也可切到 `global_reward_baseline=0.0`）。若配置 `valid_file`，每个 epoch 后会保存 valid predictions、valid ELM stats、`rl_valid_eval_history.json`，并按 valid `Delta_Arg`/`Delta_Src` 保存 `best_rl_checkpoint`。
 
 如果 notebook 中 RL cell 长时间没有输出，通常是在 `AutoModelForCausalLM.from_pretrained(...)` 加载 4B 模型或分配显存；当前 notebook 已在 tokenizer/model/group loading、每个 epoch、每个 group/rollout/condition generation attempt 前加入 `flush=True` 进度输出，便于区分“正在加载/生成”和“卡住”。
 
