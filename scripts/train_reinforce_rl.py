@@ -19,6 +19,7 @@ from llm_lab.rl_reinforce import (  # noqa: E402
     maybe_prepare_kbit_training,
     reinforce_train,
     save_config,
+    save_model_and_tokenizer,
 )
 
 
@@ -74,8 +75,7 @@ def main() -> None:
     groups = load_groups_from_file(cfg.train_file)
     print(f"Loaded {len(groups)} complete claim groups from {cfg.train_file}")
     history = reinforce_train(model, tokenizer, groups, cfg)
-    model.save_pretrained(Path(cfg.output_dir) / "final_checkpoint")
-    tokenizer.save_pretrained(Path(cfg.output_dir) / "final_checkpoint")
+    save_model_and_tokenizer(model, tokenizer, Path(cfg.output_dir) / "final_checkpoint")
     print(f"RL training complete. History records: {len(history)}")
 
 

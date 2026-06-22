@@ -36,7 +36,7 @@ reward_baseline_mode: global
 valid_file: data/processed_data/processed_valid_messages.json
 rl_valid_eval_dir: outputs/qwen3_4b_elm_reinforce/rl_valid_eval_by_epoch
 best_rl_checkpoint_dir: outputs/qwen3_4b_elm_reinforce/best_rl_checkpoint
-valid_eval_batch_size: 8
+valid_eval_batch_size: 80
 valid_eval_max_new_tokens: 32
 valid_eval_temperature: 0.0
 valid_eval_top_p: 1.0

@@ -6,6 +6,7 @@ from collections import Counter
 import json
 import math
 import random
+import re
 import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -77,7 +78,7 @@ class RLConfig:
     valid_file: str | None = None
     rl_valid_eval_dir: str | None = None
     best_rl_checkpoint_dir: str | None = None
-    valid_eval_batch_size: int = 8
+    valid_eval_batch_size: int = 80
     valid_eval_max_new_tokens: int = 32
     valid_eval_temperature: float = 0.0
     valid_eval_top_p: float = 1.0
@@ -497,6 +498,54 @@ def print_group_rollout_details(
     print("-" * 100, flush=True)
 
 
+def load_json_list(path: str | Path) -> list[dict[str, Any]]:
+    path = Path(path)
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return data
+    raise ValueError(f"Expected a JSON list in {path}, got {type(data).__name__}.")
+
+
+def infer_resume_start_epoch(cfg: RLConfig, history: list[dict[str, Any]]) -> int:
+    """Infer the next epoch when resuming from an RL LoRA checkpoint."""
+    parsed_epoch = 0
+    if cfg.resume_lora_path:
+        match = re.search(r"(?:checkpoint|best_rl_checkpoint)-epoch-(\d+)", Path(cfg.resume_lora_path).name)
+        if match:
+            parsed_epoch = int(match.group(1))
+    history_epoch = max((int(record.get("epoch", 0)) for record in history), default=0)
+    if cfg.resume_lora_path:
+        return max(parsed_epoch, history_epoch) + 1
+    return 1
+
+
+def save_model_and_tokenizer(model: Any, tokenizer: Any, output_dir: str | Path) -> None:
+    """Save a model/adapter robustly, including PEFT adapters resumed from device-mapped models."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_attempts = (
+        {"safe_serialization": False, "save_embedding_layers": False},
+        {"safe_serialization": False},
+        {},
+    )
+    last_error: Exception | None = None
+    for kwargs in save_attempts:
+        try:
+            model.save_pretrained(str(output_dir), **kwargs)
+            tokenizer.save_pretrained(str(output_dir))
+            return
+        except TypeError as exc:
+            last_error = exc
+            continue
+        except NotImplementedError as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(f"Failed to save model/tokenizer to {output_dir}") from last_error
+
+
 def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cfg: RLConfig) -> list[dict[str, Any]]:
     import torch
 
@@ -512,16 +561,29 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
         total = sum(param.numel() for param in model.parameters())
         print(f"Trainable parameters: {trainable:,} / {total:,} ({100 * trainable / max(total, 1):.4f}%)", flush=True)
     optimizer = torch.optim.AdamW(trainable_params, lr=cfg.learning_rate)
-    history: list[dict[str, Any]] = []
+    history_path = Path(cfg.output_dir) / "rl_training_history.json"
+    history: list[dict[str, Any]] = load_json_list(history_path) if cfg.resume_lora_path else []
     valid_rows = _read_json_or_jsonl(cfg.valid_file) if cfg.valid_file else []
-    valid_eval_history: list[dict[str, Any]] = []
-    previous_valid_summary: dict[str, Any] | None = None
+    valid_eval_dir = Path(cfg.rl_valid_eval_dir or Path(cfg.output_dir) / "rl_valid_eval_by_epoch")
+    valid_eval_history_path = valid_eval_dir / "rl_valid_eval_history.json"
+    valid_eval_history: list[dict[str, Any]] = load_json_list(valid_eval_history_path) if cfg.resume_lora_path else []
+    previous_valid_summary: dict[str, Any] | None = (
+        valid_eval_history[-1].get("valid_summary") if valid_eval_history else None
+    )
+    start_epoch = infer_resume_start_epoch(cfg, history)
+    end_epoch = start_epoch + cfg.num_train_epochs - 1
     if cfg.verbose and valid_rows:
         print(f"Loaded {len(valid_rows)} validation rows for RL epoch-end ELM evaluation.", flush=True)
+    if cfg.verbose and cfg.resume_lora_path:
+        print(
+            f"Resuming RL training from {cfg.resume_lora_path}; "
+            f"next epoch={start_epoch}, running through epoch={end_epoch}.",
+            flush=True,
+        )
     opt_step = 0
-    for epoch in range(1, cfg.num_train_epochs + 1):
+    for epoch in range(start_epoch, end_epoch + 1):
         if cfg.verbose:
-            print(f"===== RL epoch {epoch}/{cfg.num_train_epochs} =====", flush=True)
+            print(f"===== RL epoch {epoch}/{end_epoch} =====", flush=True)
         random.shuffle(groups)
         for batch_start in range(0, len(groups), cfg.groups_per_step):
             group_batch = groups[batch_start:batch_start + cfg.groups_per_step]
@@ -595,7 +657,7 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
                 optimizer.step(); optimizer.zero_grad(set_to_none=True); opt_step += 1
             history.extend(batch_records)
-            save_json(history, Path(cfg.output_dir) / "rl_training_history.json")
+            save_json(history, history_path)
             print(f"epoch={epoch} groups={batch_start + 1}-{batch_start + len(group_batch)}/{len(groups)} reward={mean([r['mean_reward'] for r in batch_records]):.3f} loss={loss_value:.4f}", flush=True)
         # Flush gradients for a final partial accumulation window at epoch end.
         if any(param.grad is not None for param in model.parameters()):
@@ -616,7 +678,7 @@ def reinforce_train(model: Any, tokenizer: Any, groups: list[dict[str, Any]], cf
             ckpt = Path(cfg.output_dir) / f"checkpoint-epoch-{epoch}"
             if cfg.verbose:
                 print(f"Saving epoch checkpoint to {ckpt}", flush=True)
-            model.save_pretrained(ckpt); tokenizer.save_pretrained(ckpt)
+            save_model_and_tokenizer(model, tokenizer, ckpt)
     return history
 
 
@@ -659,13 +721,21 @@ def rl_valid_improved(
     return False
 
 
-def save_rl_best_checkpoint(model: Any, tokenizer: Any, output_dir: str | Path) -> None:
+def save_rl_best_checkpoint(
+    model: Any,
+    tokenizer: Any,
+    output_dir: str | Path,
+    *,
+    epoch: int | None = None,
+) -> Path:
     output_dir = Path(output_dir)
+    if epoch is not None:
+        output_dir = output_dir.parent / f"{output_dir.name}-epoch-{epoch}"
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
+    save_model_and_tokenizer(model, tokenizer, output_dir)
+    return output_dir
 
 
 def evaluate_rl_validation(
@@ -710,15 +780,16 @@ def evaluate_rl_validation(
         previous_valid_summary,
         delta_arg_drop_tolerance=cfg.valid_delta_arg_drop_tolerance,
     )
+    saved_best_dir = None
     if improved:
-        save_rl_best_checkpoint(model, tokenizer, best_dir)
+        saved_best_dir = save_rl_best_checkpoint(model, tokenizer, best_dir, epoch=epoch)
 
     record = {
         "epoch": epoch,
         "valid_summary": summary,
         "valid_improved": improved,
         "saved_as_best": improved,
-        "best_checkpoint_dir": str(best_dir) if improved else None,
+        "best_checkpoint_dir": str(saved_best_dir) if saved_best_dir else None,
         "valid_predictions_file": str(pred_path),
         "valid_stats_file": str(stats_path),
     }
@@ -733,7 +804,7 @@ def evaluate_rl_validation(
         flush=True,
     )
     if improved:
-        print(f"Saved best RL checkpoint to: {best_dir}", flush=True)
+        print(f"Saved best RL checkpoint to: {saved_best_dir}", flush=True)
     return summary
 
 
