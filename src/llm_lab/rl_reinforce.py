@@ -122,10 +122,12 @@ def render_generation_prompt(tokenizer: Any, row: dict[str, Any]) -> str:
     return _apply_chat_template(tokenizer, messages, add_generation_prompt=True)
 
 
-def penalty_high_inv_arg_effect(diff: int) -> float:
-    """高涉入下 strong argument 应明显高于 weak argument；diff = strong - weak。"""
-    if diff >= 2:
+def high_arg_penalty(diff: int) -> float:
+    """高涉入下 strong - weak 必须为正且不能太弱；diff = strong - weak。"""
+    if diff >= 3:
         return 0.0
+    if diff == 2:
+        return -1.0
     if diff == 1:
         return -2.0
     if diff == 0:
@@ -133,42 +135,42 @@ def penalty_high_inv_arg_effect(diff: int) -> float:
     return -6.0
 
 
-def penalty_high_inv_src_effect(diff: int) -> float:
-    """高涉入下 source cue 不应该主导，但 highExpert 不能低于 lowExpert。"""
+def high_src_penalty(diff: int) -> float:
+    """高涉入下 highExpert 不能低于 lowExpert，也不能主导；diff = highExpert - lowExpert。"""
     if diff in {0, 1}:
         return 0.0
     if diff == 2:
-        return -0.5
+        return -0.8
     if diff >= 3:
         return -1.5
-    return -1.0
-
-
-def low_arg_suppression_score(diff: int) -> float:
-    """低涉入下 strong - weak 越接近 0 越好；连续 shaping score。"""
-    abs_diff = abs(diff)
-    if abs_diff == 0:
-        return 2.5
-    if abs_diff == 1:
-        return 0.8
-    if abs_diff == 2:
-        return -0.3
-    if abs_diff == 3:
-        return -0.8
-    if abs_diff == 4:
-        return -1.3
     return -2.0
 
 
-def low_src_effect_score(diff: int) -> float:
-    """低涉入下 highExpert - lowExpert 应明显为正；source cue 为辅助项。"""
-    if diff >= 2:
-        return 0.8
+def low_arg_bonus(diff: int) -> float:
+    """低涉入下 strong - weak 越接近 0 奖励越高；不符合时不给负分。"""
+    abs_d = abs(diff)
+    if abs_d == 0:
+        return 3.0
+    if abs_d == 1:
+        return 1.5
+    if abs_d == 2:
+        return 0.7
+    if abs_d == 3:
+        return 0.3
+    return 0.0
+
+
+def low_src_term(diff: int) -> float:
+    """低涉入下 highExpert - lowExpert 应该 >= 2；低于 2 扣分。"""
+    if diff >= 3:
+        return 1.2
+    if diff == 2:
+        return 1.0
     if diff == 1:
-        return -0.4
+        return -0.5
     if diff == 0:
-        return -0.8
-    return -1.2
+        return -1.2
+    return -2.0
 
 
 def detect_score_collapse(scores: dict[str, int]) -> tuple[bool, float, dict[str, Any]]:
@@ -239,10 +241,10 @@ def compute_group_reward(scores: dict[str, int]) -> tuple[float, dict[str, Any]]
         }
 
     high_terms = {
-        "arg_effect_high_inv_high_src": penalty_high_inv_arg_effect(diffs["arg_effect_high_inv_high_src"]),
-        "arg_effect_high_inv_low_src": penalty_high_inv_arg_effect(diffs["arg_effect_high_inv_low_src"]),
-        "src_effect_high_inv_strong_arg": penalty_high_inv_src_effect(diffs["src_effect_high_inv_strong_arg"]),
-        "src_effect_high_inv_weak_arg": penalty_high_inv_src_effect(diffs["src_effect_high_inv_weak_arg"]),
+        "arg_effect_high_inv_high_src": high_arg_penalty(diffs["arg_effect_high_inv_high_src"]),
+        "arg_effect_high_inv_low_src": high_arg_penalty(diffs["arg_effect_high_inv_low_src"]),
+        "src_effect_high_inv_strong_arg": high_src_penalty(diffs["src_effect_high_inv_strong_arg"]),
+        "src_effect_high_inv_weak_arg": high_src_penalty(diffs["src_effect_high_inv_weak_arg"]),
     }
     high_reward = sum(high_terms.values())
     high_arg_gate_passed = (
@@ -276,12 +278,12 @@ def compute_group_reward(scores: dict[str, int]) -> tuple[float, dict[str, Any]]
     )
 
     low_arg_terms = {
-        "arg_effect_low_inv_high_src": low_arg_suppression_score(diffs["arg_effect_low_inv_high_src"]),
-        "arg_effect_low_inv_low_src": low_arg_suppression_score(diffs["arg_effect_low_inv_low_src"]),
+        "arg_effect_low_inv_high_src": low_arg_bonus(diffs["arg_effect_low_inv_high_src"]),
+        "arg_effect_low_inv_low_src": low_arg_bonus(diffs["arg_effect_low_inv_low_src"]),
     }
     low_src_terms = {
-        "src_effect_low_inv_strong_arg": low_src_effect_score(diffs["src_effect_low_inv_strong_arg"]),
-        "src_effect_low_inv_weak_arg": low_src_effect_score(diffs["src_effect_low_inv_weak_arg"]),
+        "src_effect_low_inv_strong_arg": low_src_term(diffs["src_effect_low_inv_strong_arg"]),
+        "src_effect_low_inv_weak_arg": low_src_term(diffs["src_effect_low_inv_weak_arg"]),
     }
     low_arg_reward = sum(low_arg_terms.values())
     low_src_reward = sum(low_src_terms.values())
