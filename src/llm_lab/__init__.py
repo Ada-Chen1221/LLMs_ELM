@@ -1,3 +1,3 @@
 """Minimal HuggingFace Transformers LoRA/QLoRA lab scaffold."""
 
-__all__ = ["data", "model_utils", "train_utils"]
+__all__ = ["data", "elm_eval", "model_utils", "rl_reinforce", "train_utils"]
