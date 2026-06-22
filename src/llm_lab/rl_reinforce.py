@@ -56,7 +56,7 @@ class RLConfig:
     parse_fail_group_reward: float = PARSE_FAIL_GROUP_REWARD
     logprob_reduction: str = "sum"
     global_reward_baseline: float = 0.0
-    reward_baseline_mode: str = "group_mean"
+    reward_baseline_mode: str = "global"
     seed: int = 3407
     dtype: str = "auto"
     load_in_4bit: bool = False
@@ -68,7 +68,9 @@ class RLConfig:
     lora_alpha: int = 16
     lora_dropout: float = 0.0
     lora_target_modules: str = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
-    print_rollout_details: bool = True
+    resume_lora_path: str | None = None
+    print_rollout_details: bool = False
+    print_generation_progress: bool = False
     max_completion_print_chars: int = 500
     print_prompt_details: bool = True
     max_prompt_print_chars: int = 2000
@@ -141,27 +143,31 @@ def penalty_high_inv_src_effect(diff: int) -> float:
     return -1.0
 
 
-def bonus_low_inv_arg_suppression(diff: int) -> float:
-    """低涉入下 strong - weak 越接近 0 越好。"""
+def low_arg_suppression_score(diff: int) -> float:
+    """低涉入下 strong - weak 越接近 0 越好；连续 shaping score。"""
     abs_diff = abs(diff)
     if abs_diff == 0:
-        return 2.0
+        return 2.5
     if abs_diff == 1:
-        return 1.2
-    return 0.0
+        return 0.8
+    if abs_diff == 2:
+        return -0.3
+    if abs_diff == 3:
+        return -0.8
+    if abs_diff == 4:
+        return -1.3
+    return -2.0
 
 
-def bonus_low_inv_src_effect(diff: int) -> float:
-    """低涉入下 highExpert - lowExpert 应该为正。"""
-    if diff >= 3:
-        return 1.5
-    if diff == 2:
-        return 1.0
+def low_src_effect_score(diff: int) -> float:
+    """低涉入下 highExpert - lowExpert 应明显为正；source cue 为辅助项。"""
+    if diff >= 2:
+        return 0.8
     if diff == 1:
-        return 0.6
+        return -0.4
     if diff == 0:
-        return -0.5
-    return -1.0
+        return -0.8
+    return -1.2
 
 
 def detect_score_collapse(scores: dict[str, int]) -> tuple[bool, float, dict[str, Any]]:
@@ -263,30 +269,18 @@ def compute_group_reward(scores: dict[str, int]) -> tuple[float, dict[str, Any]]
         abs(diffs["arg_effect_low_inv_high_src"]) <= 1
         and abs(diffs["arg_effect_low_inv_low_src"]) <= 1
     )
-    if not low_arg_gate_passed:
-        reward = high_reward
-        return float(reward), {
-            "diffs": diffs,
-            "collapse_detected": False,
-            "collapse_details": collapse_details,
-            "high_terms": high_terms,
-            "low_arg_terms": {},
-            "low_src_terms": {},
-            "high_arg_gate_passed": True,
-            "low_arg_gate_passed": False,
-            "high_reward": high_reward,
-            "low_arg_reward": 0.0,
-            "low_src_reward": 0.0,
-            "reward": reward,
-        }
+    low_src_gate_passed = (
+        diffs["src_effect_low_inv_strong_arg"] >= 2
+        and diffs["src_effect_low_inv_weak_arg"] >= 2
+    )
 
     low_arg_terms = {
-        "arg_effect_low_inv_high_src": bonus_low_inv_arg_suppression(diffs["arg_effect_low_inv_high_src"]),
-        "arg_effect_low_inv_low_src": bonus_low_inv_arg_suppression(diffs["arg_effect_low_inv_low_src"]),
+        "arg_effect_low_inv_high_src": low_arg_suppression_score(diffs["arg_effect_low_inv_high_src"]),
+        "arg_effect_low_inv_low_src": low_arg_suppression_score(diffs["arg_effect_low_inv_low_src"]),
     }
     low_src_terms = {
-        "src_effect_low_inv_strong_arg": bonus_low_inv_src_effect(diffs["src_effect_low_inv_strong_arg"]),
-        "src_effect_low_inv_weak_arg": bonus_low_inv_src_effect(diffs["src_effect_low_inv_weak_arg"]),
+        "src_effect_low_inv_strong_arg": low_src_effect_score(diffs["src_effect_low_inv_strong_arg"]),
+        "src_effect_low_inv_weak_arg": low_src_effect_score(diffs["src_effect_low_inv_weak_arg"]),
     }
     low_arg_reward = sum(low_arg_terms.values())
     low_src_reward = sum(low_src_terms.values())
@@ -299,12 +293,14 @@ def compute_group_reward(scores: dict[str, int]) -> tuple[float, dict[str, Any]]
         "low_arg_terms": low_arg_terms,
         "low_src_terms": low_src_terms,
         "high_arg_gate_passed": True,
-        "low_arg_gate_passed": True,
+        "low_arg_gate_passed": low_arg_gate_passed,
+        "low_src_gate_passed": low_src_gate_passed,
         "high_reward": high_reward,
         "low_arg_reward": low_arg_reward,
         "low_src_reward": low_src_reward,
         "reward": reward,
     }
+
 
 def _tokenize(tokenizer: Any, texts: list[str], device: Any) -> dict[str, Any]:
     import torch
@@ -400,7 +396,7 @@ def run_rollout(
             pending[label] = prompt
 
         for attempt in range(1, cfg.max_regen_attempts + 1):
-            if cfg.verbose:
+            if cfg.verbose and cfg.print_generation_progress:
                 prefix = f"epoch={epoch} group={group_index} rollout={rollout_index}"
                 print(
                     f"{prefix} batch_generation_attempt={attempt}/{cfg.max_regen_attempts} "
@@ -763,6 +759,22 @@ def apply_rl_lora(model: Any, cfg: RLConfig) -> Any:
     if cfg.verbose and hasattr(model, "print_trainable_parameters"):
         model.print_trainable_parameters()
     return model
+
+
+def apply_or_resume_rl_lora(model: Any, cfg: RLConfig) -> Any:
+    """Resume a trainable RL LoRA adapter when provided, otherwise attach a fresh adapter."""
+    if cfg.resume_lora_path:
+        try:
+            from peft import PeftModel
+        except ImportError as exc:
+            raise ImportError("Resuming RL LoRA training requires peft. Install with: pip install peft") from exc
+        model = PeftModel.from_pretrained(model, cfg.resume_lora_path, is_trainable=True)
+        if cfg.verbose:
+            print(f"Resumed trainable RL LoRA adapter from: {cfg.resume_lora_path}", flush=True)
+            if hasattr(model, "print_trainable_parameters"):
+                model.print_trainable_parameters()
+        return model
+    return apply_rl_lora(model, cfg)
 
 
 def maybe_prepare_kbit_training(model: Any, cfg: RLConfig) -> Any:

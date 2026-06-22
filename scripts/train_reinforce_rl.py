@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from llm_lab.model_utils import ensure_pad_token, print_cuda_info  # noqa: E402
 from llm_lab.rl_reinforce import (  # noqa: E402
     RLConfig,
-    apply_rl_lora,
+    apply_or_resume_rl_lora,
     load_groups_from_file,
     maybe_prepare_kbit_training,
     reinforce_train,
@@ -70,7 +70,7 @@ def main() -> None:
         model.gradient_checkpointing_enable()
         model.config.use_cache = False
     model = maybe_prepare_kbit_training(model, cfg)
-    model = apply_rl_lora(model, cfg)
+    model = apply_or_resume_rl_lora(model, cfg)
     groups = load_groups_from_file(cfg.train_file)
     print(f"Loaded {len(groups)} complete claim groups from {cfg.train_file}")
     history = reinforce_train(model, tokenizer, groups, cfg)
